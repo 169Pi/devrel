@@ -2,7 +2,7 @@
 name: Aplie Showcase Entry
 about: Submit a new app, tool, or demo built using Aplie for the project board.
 title: "[Project]"
-labels: dogfooding, showcase, alpie-core
+labels: alpie-core, dogfooding, showcase
 assignees: ''
 
 ---
