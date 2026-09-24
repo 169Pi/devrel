@@ -1,5 +1,5 @@
 ---
-name: "Alpie Showcase Entry \U0001F3C6"
+name: "Alpie Showcase \U0001F3C6"
 about: Submit a new app, tool, or demo built using Alpie for the project board.
 title: "[Project]: <Name awesome of project your>"
 labels: alpie-core, dogfooding, showcase
