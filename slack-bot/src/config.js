@@ -15,7 +15,7 @@ export function loadConfig(env = process.env) {
       signingSecret: env.SLACK_SIGNING_SECRET,
       socketMode: Boolean(env.SLACK_APP_TOKEN),
       port: Number(env.PORT) || 3000,
-      command: env.SLACK_COMMAND || '/devrel-issue',
+      command: env.SLACK_COMMAND || '/alpieca',
       notifyChannel: env.SLACK_NOTIFY_CHANNEL || null,
     },
     github: {

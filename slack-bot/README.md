@@ -6,11 +6,11 @@ Lets anyone in Slack raise an issue in [`169Pi/devrel`](https://github.com/169Pi
 
 ## How people use it
 
-- `/devrel-issue` opens a picker for every template in the repo, then a form for the one you choose.
-- `/devrel-issue merch` or `/devrel-issue showcase` skips the picker.
-- `/devrel-issue help` lists the templates.
-- The **Raise a GitHub issue** shortcut in Slack's ⚡ menu does the same as `/devrel-issue`.
-- `/devrel-issue <describe it in your own words>`, or the picker's *describe it* box: Alpie drafts the issue for you (see below).
+- `/alpieca` opens a picker for every template in the repo, then a form for the one you choose.
+- `/alpieca merch` or `/alpieca showcase` skips the picker.
+- `/alpieca help` lists the templates.
+- The **Raise a GitHub issue** shortcut in Slack's ⚡ menu does the same as `/alpieca`.
+- `/alpieca <describe it in your own words>`, or the picker's *describe it* box: Alpie drafts the issue for you (see below).
 - **More actions (⋯) → Turn into GitHub issue** on any message: Alpie drafts an issue from that message and its whole thread.
 
 After you submit, the form changes to show a link to the new issue, and the bot also sends you a DM with that link. If GitHub rejects the issue, the bot DMs you everything you typed, so you don't lose your answers.
@@ -63,7 +63,7 @@ Empty optional answers are written as `_No response_`, as GitHub issue forms do.
    ```bash
    cp .env.example .env   # fill in the tokens
    npm install
-   npm run dev            # or: npm start / docker build -t devrel-issues . && docker run --env-file .env devrel-issues
+   npm run dev            # or: npm start / docker build -t alpieca . && docker run --env-file .env alpieca
    ```
 
 The bot uses Socket Mode, so it needs no public URL or ingress and can run on any always-on host. To use HTTP instead, leave `SLACK_APP_TOKEN` empty, set `SLACK_SIGNING_SECRET`, and point the app's Request URL at `https://<host>/slack/events`.

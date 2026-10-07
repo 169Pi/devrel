@@ -7,7 +7,7 @@ display_information:
   description: Slack ↔ GitHub, the woolly way. PRs trot in, issues trot out, and Alpie turns any thread into a template-ready issue.
   long_description: >-
     Alpieca is 169Pi's Slack-to-GitHub sidekick. It announces Good First Alpie pull requests in Slack when they're
-    ready for review, and lets anyone raise an issue in 169Pi/devrel without leaving Slack. Run /devrel-issue to fill
+    ready for review, and lets anyone raise an issue in 169Pi/devrel without leaving Slack. Run /alpieca to fill
     in one of the repo's issue templates, describe the problem in your own words, or use "Turn into GitHub issue" on
     any message. Alpie reads the thread, drafts the template, and adds context for maintainers. You review the draft
     before anything is filed, so every issue lands clean, labelled, and linked back to the conversation it came from.
@@ -21,7 +21,7 @@ features:
     display_name: Alpieca
     always_online: true
   slash_commands:
-    - command: /devrel-issue
+    - command: /alpieca
       description: Raise a GitHub issue from a 169Pi/devrel template
       usage_hint: "[merch | showcase | help | or describe the issue]"
       should_escape: false

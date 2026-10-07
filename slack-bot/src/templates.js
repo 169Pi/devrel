@@ -115,7 +115,7 @@ export async function loadLocalTemplates(dir, logger = console) {
   return parseTemplates(entries, logger);
 }
 
-/** Matches `/devrel-issue merch` style shortcuts against template ids and names. */
+/** Matches `/alpieca merch` style shortcuts against template ids and names. */
 export function findTemplate(templates, query) {
   const norm = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, '');
   const q = norm(query);
