@@ -1,0 +1,21 @@
+{
+  "name": "devrel-slack-issue-bot",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Slack bot that files GitHub issues in 169Pi/devrel using the repo's issue templates",
+  "type": "module",
+  "main": "src/app.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/app.js",
+    "dev": "node --env-file=.env --watch src/app.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@octokit/rest": "^22.0.1",
+    "@slack/bolt": "^5.1.0",
+    "yaml": "^2.9.1"
+  }
+}
