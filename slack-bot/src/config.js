@@ -1,3 +1,6 @@
+import os from 'node:os';
+import path from 'node:path';
+
 export function loadConfig(env = process.env) {
   const missing = ['SLACK_BOT_TOKEN', 'GITHUB_TOKEN'].filter((k) => !env[k]);
   if (!env.SLACK_APP_TOKEN && !env.SLACK_SIGNING_SECRET) {
@@ -17,6 +20,8 @@ export function loadConfig(env = process.env) {
       port: Number(env.PORT) || 3000,
       command: env.SLACK_COMMAND || '/alpieca',
       notifyChannel: env.SLACK_NOTIFY_CHANNEL || null,
+      // Slack user IDs allowed to use the triage buttons (close, label, assign…). Empty = everyone.
+      triageUsers: (env.SLACK_TRIAGE_USERS || '').split(',').map((s) => s.trim()).filter(Boolean),
     },
     github: {
       token: env.GITHUB_TOKEN,
@@ -32,6 +37,8 @@ export function loadConfig(env = process.env) {
           timeoutMs: (Number(env.ALPIE_TIMEOUT_SECONDS) || 90) * 1000,
         }
       : null,
+    // Where Alpieca remembers Slack -> GitHub usernames.
+    dataDir: env.DATA_DIR || path.join(os.homedir(), '.alpieca'),
     // Read templates from disk instead of GitHub (local development / tests).
     templateDir: env.TEMPLATE_DIR || null,
     templateTtlMs: (Number(env.TEMPLATE_CACHE_SECONDS) || 300) * 1000,

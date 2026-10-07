@@ -37,6 +37,48 @@ export function createGitHub({ token, repo, ref, logger = console }) {
       return !data.private;
     },
 
+    async userExists(login) {
+      try {
+        await octokit.users.getByUsername({ username: login });
+        return true;
+      } catch (err) {
+        if (err.status === 404) return false;
+        throw err;
+      }
+    },
+
+    async getIssue(number) {
+      return (await octokit.issues.get({ owner, repo: name, issue_number: number })).data;
+    },
+
+    async listLabels() {
+      return octokit.paginate(octokit.issues.listLabelsForRepo, { owner, repo: name, per_page: 100 });
+    },
+
+    async setLabels(number, labels) {
+      await octokit.issues.setLabels({ owner, repo: name, issue_number: number, labels });
+    },
+
+    /** Returns true if GitHub actually assigned them (it silently ignores non-assignable users). */
+    async assign(number, login) {
+      const { data } = await octokit.issues.addAssignees({ owner, repo: name, issue_number: number, assignees: [login] });
+      return data.assignees.some((a) => a.login.toLowerCase() === login.toLowerCase());
+    },
+
+    async comment(number, body) {
+      return (await octokit.issues.createComment({ owner, repo: name, issue_number: number, body })).data;
+    },
+
+    async setState(number, state) {
+      await octokit.issues.update({
+        owner,
+        repo: name,
+        issue_number: number,
+        state,
+        ...(state === 'closed' ? { state_reason: 'completed' } : {}),
+      });
+    },
+
     async createIssue({ title, body, labels, assignees }) {
       let data;
       try {
@@ -59,6 +101,7 @@ export function createGitHub({ token, repo, ref, logger = console }) {
         url: data.html_url,
         // GitHub silently drops labels the token can't apply; surface that instead of hiding it.
         missingLabels: labels.filter((l) => !applied.has(l)),
+        issue: data,
       };
     },
   };

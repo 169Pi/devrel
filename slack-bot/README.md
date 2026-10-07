@@ -12,8 +12,23 @@ Lets anyone in Slack raise an issue in [`169Pi/devrel`](https://github.com/169Pi
 - The **Raise a GitHub issue** shortcut in Slack's ⚡ menu does the same as `/alpieca`.
 - `/alpieca <describe it in your own words>`, or the picker's *describe it* box: Alpie drafts the issue for you (see below).
 - **More actions (⋯) → Turn into GitHub issue** on any message: Alpie drafts an issue from that message and its whole thread.
+- **@Alpieca** in a message or thread: Alpieca privately offers to draft an issue from that conversation.
+- `/alpieca github <username>` links your GitHub account. You're also asked for it the first time you raise an issue.
 
-After you submit, the form changes to show a link to the new issue, and the bot also sends you a DM with that link. If GitHub rejects the issue, the bot DMs you everything you typed, so you don't lose your answers.
+After you submit, Alpieca posts an **issue card** (title, labels, a preview of the body, and triage buttons) where you raised it: the channel you ran `/alpieca` in, or the thread you mentioned it in or used the shortcut on. In private channels Alpieca hasn't been invited to, and for the ⚡ shortcut, the card comes to you as a DM instead. If GitHub rejects the issue, Alpieca DMs you everything you typed, so you don't lose your answers.
+
+## Who raised it
+
+Every issue is opened by the bot's GitHub token, so on GitHub it looks like the token's owner opened all of them. To credit the real person, the form asks each reporter for their GitHub username once, checks that the account exists, and remembers it. The issue footer then reads *Raised from Slack by Priya (@priya-dev)*. The @mention notifies and subscribes them on GitHub, and the Slack card shows them as the author, not the token owner.
+
+## Issue cards and triage
+
+Cards have **View on GitHub**, **🙋 Assign to me**, **🏷️ Label**, **💬 Comment** and **✅ Close** (or **↩️ Reopen**) buttons. Each action happens on GitHub, then the card refreshes from GitHub with a note like *Closed by @Rahul*. Comments are posted with the commenter's name and GitHub username, and quoted in the card's thread. *Assign to me* needs a linked GitHub account and repo access. Set `SLACK_TRIAGE_USERS` to limit the buttons to specific people.
+
+**Issues opened directly on GitHub** get the same card, posted by the [`alpieca-new-issue`](../.github/workflows/alpieca-new-issue.yml) workflow. Issues filed from Slack carry a hidden `<!-- alpieca -->` marker, so they're never posted twice. To set it up, go to the repo's **Settings → Secrets and variables → Actions** and add:
+- **Secret `SLACK_BOT_TOKEN`:** Alpieca's `xoxb-…` token. It must be Alpieca's, so that button clicks reach the bot.
+- **Variable `SLACK_ISSUES_CHANNEL`:** the channel ID (`C…`) for new issues. Invite `@Alpieca` there, and set the bot's `SLACK_NOTIFY_CHANNEL` to the same channel so issues from both sources land together.
+
 
 ## Drafting with Alpie
 
@@ -51,7 +66,7 @@ Empty optional answers are written as `_No response_`, as GitHub issue forms do.
 
 ## Setup
 
-1. **Create the Slack app.** Go to [api.slack.com/apps](https://api.slack.com/apps) → *Create New App* → *From an app manifest*, and paste [`manifest.yml`](manifest.yml). Install it to the workspace. Invite the bot to channels where you'll use *Turn into GitHub issue* (`/invite @Alpieca`) so it can read whole threads. Otherwise Alpie drafts from the selected message only.
+1. **Create the Slack app.** Go to [api.slack.com/apps](https://api.slack.com/apps) → *Create New App* → *From an app manifest*, and paste [`manifest.yml`](manifest.yml). Install it to the workspace. Whenever the manifest's scopes or events change (e.g. this version adds `chat:write.public`, `app_mentions:read` and the `app_mention` event), paste it again and **Reinstall to Workspace**. Invite the bot to channels where you'll use *Turn into GitHub issue* (`/invite @Alpieca`) so it can read whole threads. Otherwise Alpie drafts from the selected message only.
    - **Bot token:** *OAuth & Permissions* → *Bot User OAuth Token* (`xoxb-…`) → `SLACK_BOT_TOKEN`
    - **App token:** *Basic Information* → *App-Level Tokens* → create one with `connections:write` (`xapp-…`) → `SLACK_APP_TOKEN`
 
