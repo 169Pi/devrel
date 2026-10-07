@@ -70,6 +70,19 @@ The bot uses Socket Mode, so it needs no public URL or ingress and can run on an
 
 Optional settings: `SLACK_NOTIFY_CHANNEL` posts every new issue to a team channel. `GITHUB_TEMPLATE_REF` reads templates from a branch other than the default. `TEMPLATE_DIR` reads templates from disk. See [`.env.example`](.env.example).
 
+## Deploying on AWS
+
+Alpieca runs on one small EC2 instance. It needs no inbound ports, load balancer or public URL, because Socket Mode connects outbound only. Secrets live in SSM Parameter Store and are never written to disk. You manage the instance through Session Manager, so there are no SSH keys. [`deploy/aws/user-data.sh`](deploy/aws/user-data.sh) does all of the server setup on first boot.
+
+1. **Secrets:** in **Systems Manager → Parameter Store**, create these as `SecureString`: `/alpieca/SLACK_BOT_TOKEN`, `/alpieca/SLACK_APP_TOKEN`, `/alpieca/GITHUB_TOKEN`, `/alpieca/ALPIE_API_KEY`. Any other variable from `.env.example` works the same way, e.g. `/alpieca/SLACK_NOTIFY_CHANNEL`.
+2. **Instance role:** in **IAM → Roles → Create role → EC2**, attach `AmazonSSMManagedInstanceCore` and add [`deploy/aws/iam-policy.json`](deploy/aws/iam-policy.json) as an inline policy. Name the role `alpieca-ec2`.
+3. **Launch:** create an **Amazon Linux 2023 (arm64)** instance of type `t4g.micro`. Pick no key pair, a security group with **no inbound rules**, and a public IP. Set the IAM instance profile to `alpieca-ec2`, and paste `user-data.sh` into **Advanced details → User data**.
+4. **Verify:** **Connect → Session Manager**, then run `sudo journalctl -u alpieca -f`. You should see `Alpieca running (Socket Mode)…`. Stop any other running copy, such as a laptop, because only one instance should run at a time.
+
+- **Deploy a new version:** run `sudo alpieca-update` in Session Manager. It pulls `main`, installs dependencies and restarts.
+- **Rotate a secret:** update the parameter, then run `sudo systemctl restart alpieca`.
+- **Cost:** roughly $7–10 a month: the instance (about $3 for a `t4g.nano`, $6 for a `t4g.micro`), plus about $3.65 for the public IPv4 address that outbound traffic needs, plus under $1 for an 8 GB disk. The bot uses about 100 MB of RAM, so a `t4g.nano` (0.5 GB) works if you want the lowest cost.
+
 ## Development
 
 ```bash
