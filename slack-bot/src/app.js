@@ -226,6 +226,6 @@ await templates.refresh();
 publicRepo = await github.isPublic().catch(() => true);
 await app.start();
 console.log(
-  `DevRel issue bot running (${config.slack.socketMode ? 'Socket Mode' : `HTTP on :${config.slack.port}`}), filing into ${config.github.repo}` +
+  `Alpieca running (${config.slack.socketMode ? 'Socket Mode' : `HTTP on :${config.slack.port}`}), filing into ${config.github.repo}` +
     (alpie ? `, drafting with ${config.alpie.model}` : ', Alpie drafting off (no ALPIE_API_KEY)'),
 );

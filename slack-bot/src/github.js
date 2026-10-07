@@ -3,7 +3,7 @@ import { TEMPLATE_DIR, isTemplateFile, parseTemplates } from './templates.js';
 
 export function createGitHub({ token, repo, ref, logger = console }) {
   const [owner, name] = repo.split('/');
-  const octokit = new Octokit({ auth: token, userAgent: 'devrel-slack-issue-bot' });
+  const octokit = new Octokit({ auth: token, userAgent: 'alpieca-slack-bot' });
 
   return {
     /** Reads the templates from the repo itself, so Slack always matches GitHub. */

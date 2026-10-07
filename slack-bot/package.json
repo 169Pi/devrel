@@ -1,8 +1,8 @@
 {
-  "name": "devrel-slack-issue-bot",
+  "name": "alpieca",
   "version": "1.0.0",
   "private": true,
-  "description": "Slack bot that files GitHub issues in 169Pi/devrel using the repo's issue templates",
+  "description": "Alpieca: Slack bot that files GitHub issues in 169Pi/devrel using the repo's issue templates",
   "type": "module",
   "main": "src/app.js",
   "engines": {

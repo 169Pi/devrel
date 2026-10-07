@@ -1,4 +1,6 @@
-# DevRel Issues: Slack → GitHub issue bot
+# Alpieca 🦙
+
+*Slack ↔ GitHub, the woolly way.* Alpieca is 169Pi's Slack app. PR alerts trot in from GitHub, issues trot out to GitHub, and Alpie turns any thread into a template-ready issue.
 
 Lets anyone in Slack raise an issue in [`169Pi/devrel`](https://github.com/169Pi/devrel) through a form generated from the repo's own [issue templates](../.github/ISSUE_TEMPLATE). Issues land with the template's exact headings, title prefix, labels and assignees, so they look the same as issues opened from GitHub's **New issue** page.
 
@@ -49,11 +51,11 @@ Empty optional answers are written as `_No response_`, as GitHub issue forms do.
 
 ## Setup
 
-1. **Create the Slack app.** Go to [api.slack.com/apps](https://api.slack.com/apps) → *Create New App* → *From an app manifest*, and paste [`manifest.yml`](manifest.yml). Install it to the workspace. Invite the bot to channels where you'll use *Turn into GitHub issue* (`/invite @DevRel Issues`) so it can read whole threads. Otherwise Alpie drafts from the selected message only.
+1. **Create the Slack app.** Go to [api.slack.com/apps](https://api.slack.com/apps) → *Create New App* → *From an app manifest*, and paste [`manifest.yml`](manifest.yml). Install it to the workspace. Invite the bot to channels where you'll use *Turn into GitHub issue* (`/invite @Alpieca`) so it can read whole threads. Otherwise Alpie drafts from the selected message only.
    - **Bot token:** *OAuth & Permissions* → *Bot User OAuth Token* (`xoxb-…`) → `SLACK_BOT_TOKEN`
    - **App token:** *Basic Information* → *App-Level Tokens* → create one with `connections:write` (`xapp-…`) → `SLACK_APP_TOKEN`
 
-   **Reusing an existing app instead (e.g. "169pi PR Bot"):** open the app at api.slack.com/apps → **App Manifest**, and merge in the `slash_commands`, `shortcuts`, `bot_user`, `app_home`, `oauth_config.scopes.bot` and `settings` entries from `manifest.yml`. Keep everything already there, especially `incoming_webhooks`. Then **Reinstall to Workspace** to grant the new scopes. Existing webhook URLs (like the `SLACK_WEBHOOK_URL` used by `169Pi/.github`'s PR notifier) keep working. Don't *uninstall* the app, because that revokes them. Then generate the app-level token as below.
+   **Upgrading the existing "169pi PR Bot" app instead:** open it at api.slack.com/apps → **App Manifest**, replace the whole manifest with [`manifest.yml`](manifest.yml), and save. That renames it to Alpieca and adds the issue features. Then **Reinstall to Workspace** to grant the new scopes. The manifest keeps the `incoming-webhook` scope, so the `SLACK_WEBHOOK_URL` used by the PR notifier in `169Pi/.github` keeps working. Don't *uninstall* the app, because that revokes the webhook. Socket Mode is already on there, so reuse its app-level token if one exists.
 2. **Create a GitHub token.** Make a [fine-grained PAT](https://github.com/settings/personal-access-tokens/new) (or a GitHub App installation token) limited to `169Pi/devrel` with **Issues: Read and write** and **Contents: Read** → `GITHUB_TOKEN`. Issues are created as the token's owner, so a dedicated bot account keeps attribution tidy.
 3. **(Optional) Turn on Alpie.** Create a key at [playground.169pi.ai](https://playground.169pi.ai/dashboard/api-keys) → `ALPIE_API_KEY`. Without it, the bot runs as plain forms.
 4. **Run it:**
