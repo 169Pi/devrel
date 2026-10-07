@@ -208,8 +208,8 @@ app.view(CALLBACK.form, async ({ ack, body, view, client, logger }) => {
           .catch((err) => logger.warn(err)),
     ]);
   } catch (err) {
-    logger.error(err);
     const reason = err.response?.data?.message ?? err.message;
+    logger.error(`Couldn't create issue "${issue.title}": ${reason}`);
     await Promise.all([
       update('Issue not created', `:x: GitHub rejected the issue: ${reason}\nYour answers were sent to you in a DM so you don't lose them.`),
       // Hand the drafted issue back so nothing typed in the modal is lost.

@@ -3,7 +3,12 @@ import { TEMPLATE_DIR, isTemplateFile, parseTemplates } from './templates.js';
 
 export function createGitHub({ token, repo, ref, logger = console }) {
   const [owner, name] = repo.split('/');
-  const octokit = new Octokit({ auth: token, userAgent: 'alpieca-slack-bot' });
+  const octokit = new Octokit({
+    auth: token,
+    userAgent: 'alpieca-slack-bot',
+    // 2022-11-28 (Octokit's default) now returns Deprecation headers.
+    request: { headers: { 'X-GitHub-Api-Version': '2026-03-10' } },
+  });
 
   return {
     /** Reads the templates from the repo itself, so Slack always matches GitHub. */
@@ -33,7 +38,21 @@ export function createGitHub({ token, repo, ref, logger = console }) {
     },
 
     async createIssue({ title, body, labels, assignees }) {
-      const { data } = await octokit.issues.create({ owner, repo: name, title, body, labels, assignees });
+      let data;
+      try {
+        ({ data } = await octokit.issues.create({ owner, repo: name, title, body, labels, assignees }));
+      } catch (err) {
+        if (err.status === 403 || err.status === 404) {
+          // Fine-grained tokens can still read a public repo while lacking write access, so
+          // templates load fine and only creation fails. Say what to fix instead of a bare 403.
+          throw new Error(
+            `the bot's GitHub token can't create issues in ${repo}. It needs "Issues: Read and write" on ${repo}, ` +
+              `and if it's a fine-grained token owned by ${owner}, an org owner must approve it`,
+            { cause: err },
+          );
+        }
+        throw err;
+      }
       const applied = new Set(data.labels.map((l) => (typeof l === 'string' ? l : l.name)));
       return {
         number: data.number,
