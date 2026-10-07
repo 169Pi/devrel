@@ -1,0 +1,59 @@
+# Alpieca 🦙: 169Pi's Slack <-> GitHub app.
+# Paste this as the whole manifest of the existing "169pi PR Bot" app (api.slack.com/apps -> App Manifest),
+# or use it to create a fresh app ("Create New App" -> "From an app manifest").
+# incoming-webhook keeps the PR notifier in 169Pi/.github (SLACK_WEBHOOK_URL) working.
+display_information:
+  name: Alpieca
+  description: Slack ↔ GitHub, the woolly way. PRs trot in, issues trot out, and Alpie turns any thread into a template-ready issue.
+  long_description: >-
+    Alpieca is 169Pi's Slack-to-GitHub sidekick. It announces Good First Alpie pull requests in Slack when they're
+    ready for review, and lets anyone raise an issue in 169Pi/devrel without leaving Slack. Run /alpieca to fill
+    in one of the repo's issue templates, describe the problem in your own words, or use "Turn into GitHub issue" on
+    any message. Alpie reads the thread, drafts the template, and adds context for maintainers. You review the draft
+    before anything is filed, so every issue lands clean, labelled, and linked back to the conversation it came from.
+  background_color: "#000000"
+features:
+  app_home:
+    home_tab_enabled: false
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: true
+  bot_user:
+    display_name: Alpieca
+    always_online: true
+  slash_commands:
+    - command: /alpieca
+      description: Raise a GitHub issue from a 169Pi/devrel template
+      usage_hint: "[merch | showcase | help | or describe the issue]"
+      should_escape: false
+  shortcuts:
+    - name: Raise a GitHub issue
+      type: global
+      callback_id: raise_github_issue
+      description: File an issue in 169Pi/devrel using its issue templates
+    - name: Turn into GitHub issue
+      type: message
+      callback_id: issue_from_message
+      description: Alpie drafts a 169Pi/devrel issue from this message and its thread
+oauth_config:
+  scopes:
+    bot:
+      # PR notifications from 169Pi/.github (slack-pr-notify.yml)
+      - incoming-webhook
+      # Issue raising
+      - commands
+      - chat:write
+      - users:read
+      # Read threads for the "Turn into GitHub issue" message shortcut
+      - channels:history
+      - groups:history
+      - im:history
+      - mpim:history
+  pkce_enabled: false
+settings:
+  interactivity:
+    is_enabled: true
+  org_deploy_enabled: false
+  socket_mode_enabled: true
+  token_rotation_enabled: false
+  app_level_token_rotation_enabled: false
+  is_mcp_enabled: false
