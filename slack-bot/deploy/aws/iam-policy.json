@@ -5,7 +5,7 @@
       "Sid": "ReadAlpiecaSecrets",
       "Effect": "Allow",
       "Action": "ssm:GetParametersByPath",
-      "Resource": "arn:aws:ssm:*:*:parameter/alpieca"
+      "Resource": ["arn:aws:ssm:*:*:parameter/alpieca", "arn:aws:ssm:*:*:parameter/alpieca/*"]
     },
     {
       "Sid": "DecryptSecureStrings",
