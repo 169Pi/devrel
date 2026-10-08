@@ -12,7 +12,7 @@ Lets anyone in Slack raise an issue in [`169Pi/devrel`](https://github.com/169Pi
 - The **Raise a GitHub issue** shortcut in Slack's ⚡ menu does the same as `/alpieca`.
 - `/alpieca <describe it in your own words>`, or the picker's *describe it* box: Alpie drafts the issue for you (see below).
 - **More actions (⋯) → Turn into GitHub issue** on any message: Alpie drafts an issue from that message and its whole thread.
-- **@Alpieca** in a message or thread: Alpieca privately offers to draft an issue from that conversation.
+- **@Alpieca** in any channel or thread it's in, or a **DM** to Alpieca: ask a question, or describe a bug or idea (see *Talking to Alpieca* below).
 - `/alpieca github <username>` links your GitHub account. You're also asked for it the first time you raise an issue.
 
 After you submit, Alpieca posts an **issue card** (title, labels, a preview of the body, and triage buttons) where you raised it: the channel you ran `/alpieca` in, or the thread you mentioned it in or used the shortcut on. In private channels Alpieca hasn't been invited to, and for the ⚡ shortcut, the card comes to you as a DM instead. If GitHub rejects the issue, Alpieca DMs you everything you typed, so you don't lose your answers.
@@ -29,6 +29,20 @@ Cards have **View on GitHub**, **🙋 Assign to me**, **🏷️ Label**, **💬 
 - **Secret `SLACK_BOT_TOKEN`:** Alpieca's `xoxb-…` token. It must be Alpieca's, so that button clicks reach the bot.
 - **Variable `SLACK_ISSUES_CHANNEL`:** the channel ID (`C…`) for new issues. Invite `@Alpieca` there, and set the bot's `SLACK_NOTIFY_CHANNEL` to the same channel so issues from both sources land together.
 
+
+## Talking to Alpieca
+
+Mention `@Alpieca` in a channel or thread, or DM it. If you mention it in a channel it isn't in, Slack offers to invite it.
+
+- **Something to raise** (*"the docs search is broken"*, *"we should make hoodies"*): Alpieca privately offers **✨ Review Alpie's draft** or **Pick a template**. Alpie **starts drafting the moment you send the message**, so the draft is usually ready, or nearly ready, by the time you click. The issue card is posted back in that thread or DM.
+- **A question** (*"are there any merch ideas filed?"*): Alpie answers in the thread, using the issue templates, the 25 most recently updated issues and the conversation, plus **📝 Draft an issue from this** in case it should be one. Links that aren't to real issues, the repo or the conversation are removed from answers.
+- A bare `@Alpieca` in a thread means *turn this thread into an issue*. `@Alpieca help` (or `hi`) shows what it can do.
+
+Whether a message is "something to raise" or "a question" is a quick keyword check (`looksLikeIssue` in `src/slack-text.js`). Either way the other option is one click away.
+
+### Why drafting takes ~15 seconds
+
+Alpie is a reasoning model: it writes about 1,200 characters of reasoning before the ~400-character JSON draft, at roughly 30 tokens/second. Prompt size barely matters, and the API ignores the usual ways of turning reasoning off: pre-filled answers, `enable_thinking: false`, and instructions to be brief. So the bot hides the wait instead, by drafting in the background as soon as an issue-like mention or DM arrives. A faster Alpie mode would need to come from the Alpie API itself.
 
 ## Drafting with Alpie
 
