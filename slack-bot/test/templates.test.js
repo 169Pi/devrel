@@ -75,14 +75,14 @@ test('rendered issue keeps the template layout byte-for-byte', async () => {
 
   assert.match(issue.body, /\* \*\*Live Demo \(if applicable\):\*\* _No response_/);
   assert.match(issue.body, /### 📝 The Elevator Pitch\nPages the on-call\nwhen evals regress\./);
-  assert.match(issue.body, /Raised from Slack by Vishal Das<\/sub>\n$/);
+  assert.match(issue.body, /Raised from Slack by Vishal Das<\/sub>\n\n<!-- alpieca -->\n$/);
 });
 
 test('title prefix is not doubled and empty optional sections say so', () => {
   const merch = byName('Merch');
   const issue = renderIssue(merch, { title: '[merch idea]: Neon socks', s0: 'Socks', s1: 'Neon', s2: 'Warm feet' });
   assert.equal(issue.title, '[MERCH IDEA]: Neon socks');
-  assert.ok(issue.body.endsWith(`### 📸 Inspiration / Moodboard (Optional)\n${NO_RESPONSE}\n`));
+  assert.ok(issue.body.includes(`### 📸 Inspiration / Moodboard (Optional)\n${NO_RESPONSE}\n\n<!-- alpieca -->`));
 });
 
 test('validation flags non-links and over-long titles', () => {
@@ -101,7 +101,11 @@ test('modal views respect Slack limits and round-trip answers', () => {
     assert.ok(view.blocks.length <= 100);
     const ids = view.blocks.filter((b) => b.type === 'input').map((b) => b.block_id);
     assert.equal(new Set(ids).size, ids.length);
-    assert.deepEqual(ids, ['title', ...t.sections.flatMap((s) => (s.fields.length ? s.fields.map((f) => f.id) : [s.id]))]);
+    assert.deepEqual(ids, [
+      'title',
+      ...t.sections.flatMap((s) => (s.fields.length ? s.fields.map((f) => f.id) : [s.id])),
+      'github_login',
+    ]);
     assert.deepEqual(JSON.parse(view.private_metadata), { templateId: t.id, version: t.version });
   }
   const alpie = formView(byName('Alpie'), { authorName: 'Vishal Das' });

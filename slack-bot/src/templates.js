@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
+import { slackMarker } from './issue-card.js';
 
 export const TEMPLATE_DIR = '.github/ISSUE_TEMPLATE';
 export const NO_RESPONSE = '_No response_';
@@ -156,7 +157,7 @@ function stripPrefix(prefix, summary) {
  * Renders answers back into the template's own Markdown layout, so issues filed
  * from Slack look exactly like issues filed through GitHub's "New issue" page.
  */
-export function renderIssue(template, answers, { reporter, drafted = false, source } = {}) {
+export function renderIssue(template, answers, { reporter, githubLogin, drafted = false, source } = {}) {
   const summary = stripPrefix(template.titlePrefix, (answers.title ?? '').trim());
   const parts = template.sections.map((section) => {
     const heading = `${'#'.repeat(section.level)} ${section.heading}`;
@@ -170,12 +171,15 @@ export function renderIssue(template, answers, { reporter, drafted = false, sour
   });
   const extra = (answers.extra_context ?? '').trim();
   if (extra) parts.push(`### ${drafted ? '🤖 ' : ''}Additional context\n${extra}`);
+  const who = reporter?.replace(/[<>@]/g, '').trim();
   const footer = [
-    reporter && `Raised from Slack by ${reporter.replace(/[<>@]/g, '').trim()}`,
+    // @login notifies and subscribes the real reporter; the issue itself is opened by the bot's token.
+    (who || githubLogin) && `Raised from Slack by ${[who, githubLogin && `(@${githubLogin})`].filter(Boolean).join(' ')}`,
     drafted && 'drafted with Alpie',
     source && `[source thread](${source})`,
   ].filter(Boolean);
   if (footer.length) parts.push(`---\n<sub>${footer.join(' · ')}</sub>`);
+  parts.push(slackMarker(githubLogin));
   return {
     title: `${template.titlePrefix}${summary}`,
     body: `${parts.join('\n\n')}\n`,

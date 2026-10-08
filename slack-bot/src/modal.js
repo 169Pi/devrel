@@ -1,4 +1,10 @@
-export const CALLBACK = { pick: 'issue_template_pick', form: 'issue_template_form' };
+export const CALLBACK = {
+  pick: 'issue_template_pick',
+  form: 'issue_template_form',
+  comment: 'issue_comment_submit',
+  label: 'issue_label_submit',
+  githubLogin: 'github_login_submit',
+};
 
 // Slack Block Kit limits
 const MODAL_TITLE_MAX = 24;
@@ -7,6 +13,7 @@ const HINT_MAX = 2000;
 const TEXTAREA_MAX = 3000;
 const AUTHOR_FIELD = /\b(mastermind|author|owner|submitted by|your name|reporter)/i;
 export const EXTRA_CONTEXT = 'extra_context';
+export const GITHUB_LOGIN_BLOCK = 'github_login';
 
 const text = (value) => ({ type: 'plain_text', text: value, emoji: true });
 const truncate = (s, n) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
@@ -78,8 +85,13 @@ export function pickerView(templates, { repo, alpie = false, feedback = '', warn
  *                     shown whenever this is a string (even an empty one)
  * @param drafted      whether Alpie drafted the answers (shown in the issue footer)
  * @param source       Slack permalink the issue was raised from
+ * @param githubLogin  the reporter's remembered GitHub username, if known
+ * @param origin       { channel, thread } to post the confirmation card in
  */
-export function formView(template, { authorName, initial = {}, extraContext, drafted = false, source, banner, publicRepo } = {}) {
+export function formView(
+  template,
+  { authorName, initial = {}, extraContext, drafted = false, source, banner, publicRepo, githubLogin, origin } = {},
+) {
   const blocks = [];
   if (banner) blocks.push(notice(banner));
   if (publicRepo && (drafted || source)) {
@@ -151,6 +163,21 @@ export function formView(template, { authorName, initial = {}, extraContext, dra
     );
   }
 
+  blocks.push(
+    { type: 'divider' },
+    input(
+      GITHUB_LOGIN_BLOCK,
+      'Your GitHub username',
+      {
+        type: 'plain_text_input',
+        max_length: 60,
+        placeholder: text('octocat'),
+        ...(githubLogin ? { initial_value: githubLogin } : {}),
+      },
+      { hint: "You're @mentioned on the issue so you get GitHub notifications. Alpieca remembers it for next time." },
+    ),
+  );
+
   return {
     type: 'modal',
     callback_id: CALLBACK.form,
@@ -159,11 +186,72 @@ export function formView(template, { authorName, initial = {}, extraContext, dra
       version: template.version,
       ...(drafted ? { drafted } : {}),
       ...(source ? { source } : {}),
+      ...(origin ? { origin } : {}),
     }),
     title: text(truncate(template.name, MODAL_TITLE_MAX)),
     submit: text('Create issue'),
     close: text('Cancel'),
     blocks,
+  };
+}
+
+/** Comment on an issue from Slack. `meta` carries { number, channel, ts } of the card to refresh. */
+export function commentView(issue, meta) {
+  return {
+    type: 'modal',
+    callback_id: CALLBACK.comment,
+    private_metadata: JSON.stringify(meta),
+    title: text(truncate(`Comment on #${issue.number}`, MODAL_TITLE_MAX)),
+    submit: text('Post comment'),
+    close: text('Cancel'),
+    blocks: [
+      notice(`*${truncate(issue.title, 200)}*`),
+      input('comment', 'Comment', { type: 'plain_text_input', multiline: true, max_length: TEXTAREA_MAX }, {
+        hint: 'Posted on GitHub with your name and GitHub username. Markdown works.',
+      }),
+    ],
+  };
+}
+
+export function labelView(issue, allLabels, meta) {
+  const current = new Set((issue.labels ?? []).map((l) => (typeof l === 'string' ? l : l.name)));
+  const option = (name) => ({ text: text(truncate(name, OPTION_TEXT_MAX)), value: name.slice(0, 150) });
+  const options = allLabels.slice(0, 100).map((l) => option(l.name));
+  const initial = options.filter((o) => current.has(o.value));
+  return {
+    type: 'modal',
+    callback_id: CALLBACK.label,
+    private_metadata: JSON.stringify(meta),
+    title: text(truncate(`Labels for #${issue.number}`, MODAL_TITLE_MAX)),
+    submit: text('Save labels'),
+    close: text('Cancel'),
+    blocks: [
+      notice(`*${truncate(issue.title, 200)}*`),
+      input(
+        'labels',
+        'Labels',
+        { type: 'multi_static_select', options, ...(initial.length ? { initial_options: initial } : {}) },
+        { optional: true },
+      ),
+    ],
+  };
+}
+
+/** Asks for a GitHub username before an action that needs one (e.g. "Assign to me"). */
+export function githubLoginView(meta, { reason }) {
+  return {
+    type: 'modal',
+    callback_id: CALLBACK.githubLogin,
+    private_metadata: JSON.stringify(meta),
+    title: text('Link your GitHub'),
+    submit: text('Save'),
+    close: text('Cancel'),
+    blocks: [
+      notice(reason),
+      input(GITHUB_LOGIN_BLOCK, 'Your GitHub username', { type: 'plain_text_input', max_length: 60, placeholder: text('octocat') }, {
+        hint: 'Alpieca remembers it, so you only do this once.',
+      }),
+    ],
   };
 }
 
@@ -181,7 +269,9 @@ export function readAnswers(view) {
   const answers = {};
   for (const [blockId, actions] of Object.entries(view.state?.values ?? {})) {
     const el = actions.value;
-    answers[blockId] = el?.value ?? el?.selected_option?.value ?? '';
+    answers[blockId] = el?.selected_options
+      ? el.selected_options.map((o) => o.value)
+      : (el?.value ?? el?.selected_option?.value ?? '');
   }
   return answers;
 }

@@ -42,7 +42,11 @@ oauth_config:
       # Issue raising
       - commands
       - chat:write
+      # Post issue cards in public channels where /alpieca was used, without being invited first
+      - chat:write.public
       - users:read
+      # "@Alpieca" mentions offer to turn the conversation into an issue
+      - app_mentions:read
       # Read threads for the "Turn into GitHub issue" message shortcut
       - channels:history
       - groups:history
@@ -50,6 +54,9 @@ oauth_config:
       - mpim:history
   pkce_enabled: false
 settings:
+  event_subscriptions:
+    bot_events:
+      - app_mention
   interactivity:
     is_enabled: true
   org_deploy_enabled: false

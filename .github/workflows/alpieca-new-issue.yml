@@ -1,0 +1,29 @@
+name: Alpieca new issue
+
+# Posts issues opened directly on GitHub to Slack as an Alpieca card with triage
+# buttons. Issues filed from Slack carry a hidden marker and are skipped, because
+# Alpieca already posted them.
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: read
+
+jobs:
+  post-to-slack:
+    runs-on: ubuntu-latest
+    steps:
+      # Checks out the default branch (issues events never run code from the issue).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: slack-bot
+          persist-credentials: false
+
+      - name: Post issue card to Slack
+        run: node slack-bot/scripts/post-github-issue.js
+        env:
+          # Alpieca's bot token (xoxb-…), so button clicks reach the running bot.
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          # Channel ID (C…) for new issues; use the same channel as the bot's SLACK_NOTIFY_CHANNEL.
+          SLACK_ISSUES_CHANNEL: ${{ vars.SLACK_ISSUES_CHANNEL }}
