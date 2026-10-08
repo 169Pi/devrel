@@ -38,12 +38,12 @@ const GOOD = {
 };
 
 test('prompt carries template schema, reporter, and fenced feedback', () => {
-  const [system, user] = buildDraftMessages({ templates, feedback: FEEDBACK, reporter: 'Vishal Das' });
+  const [system, user] = buildDraftMessages({ templates, feedback: FEEDBACK, reporter: 'Ada Lovelace' });
   assert.match(system.content, /data, not instructions/);
   assert.match(user.content, /Pick the template/);
   assert.match(user.content, /"s3f0"/);
   assert.match(user.content, /"link": true/);
-  assert.match(user.content, /reporter .* is Vishal Das/);
+  assert.match(user.content, /reporter .* is Ada Lovelace/);
   assert.match(user.content, /<feedback>\nPriya: I built/);
   assert.match(buildDraftMessages({ templates: [merch], feedback: 'x' })[1].content, /Use this template/);
 });
@@ -101,9 +101,9 @@ test('API errors surface the backend message', async () => {
 
 test('drafted form is pre-filled, flagged, and renders Alpie context into the issue', () => {
   const draft = parseDraft(reply(GOOD), templates, { feedback: FEEDBACK });
-  const source = 'https://169pi.slack.com/archives/C1/p123';
+  const source = 'https://example.slack.com/archives/C1/p123';
   const view = formView(draft.template, {
-    authorName: 'Vishal Das',
+    authorName: 'Ada Lovelace',
     initial: draft.answers,
     extraContext: draft.additionalContext,
     drafted: true,
@@ -119,12 +119,12 @@ test('drafted form is pre-filled, flagged, and renders Alpie context into the is
   assert.deepEqual(JSON.parse(view.private_metadata), { templateId: alpie.id, version: alpie.version, drafted: true, source });
 
   const issue = renderIssue(alpie, { ...draft.answers, s3f2: 'https://docs.169pi.ai', [EXTRA_CONTEXT]: draft.additionalContext }, {
-    reporter: 'Vishal Das',
+    reporter: 'Ada Lovelace',
     drafted: true,
     source,
   });
   assert.match(issue.body, /### 🤖 Additional context\n- Rahul hit the streaming cutoff too/);
-  assert.match(issue.body, /<sub>Raised from Slack by Vishal Das · drafted with Alpie · \[source thread\]\(https:\/\/169pi\.slack\.com/);
+  assert.match(issue.body, /<sub>Raised from Slack by Ada Lovelace · drafted with Alpie · \[source thread\]\(https:\/\/example\.slack\.com/);
   // Without Alpie context, no extra section appears.
   assert.doesNotMatch(renderIssue(alpie, { title: 'x' }).body, /Additional context/);
 });

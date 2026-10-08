@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { App } from '@slack/bolt';
+import { accessFor, isPublicChannel } from './access.js';
 import { AlpieError, createAlpie } from './alpie.js';
 import { loadConfig } from './config.js';
 import { createGitHub } from './github.js';
@@ -46,17 +47,34 @@ const app = new App({
   port: config.slack.port,
 });
 
-const names = new Map();
+// Slack user profiles, cached for 10 minutes (guest status can change).
+const users = new Map();
+async function userInfo(client, userId) {
+  const cached = users.get(userId);
+  if (cached && Date.now() - cached.at < 10 * 60_000) return cached.user;
+  const user = await client.users.info({ user: userId }).then((r) => r.user, () => null);
+  users.set(userId, { user, at: Date.now() });
+  return user;
+}
+
 async function displayName(client, userId) {
-  if (!names.has(userId)) {
-    try {
-      const { user } = await client.users.info({ user: userId });
-      names.set(userId, user.profile?.real_name || user.profile?.display_name || user.name);
-    } catch {
-      return null;
-    }
+  const user = await userInfo(client, userId);
+  return user ? user.profile?.real_name || user.profile?.display_name || user.name : null;
+}
+
+// The workspace Alpieca is installed in, filled in at startup from auth.test.
+const home = { teamId: null, enterpriseId: null };
+const access = async (client, userId) => accessFor(await userInfo(client, userId), home);
+const NOT_A_MEMBER = ':lock: Alpieca only works for members of this workspace.';
+
+// Links to public channels are fine in a public issue; private channels and DMs stay private.
+const channels = new Map();
+async function publicPermalink(client, channel, ts) {
+  if (!channels.has(channel)) {
+    channels.set(channel, await client.conversations.info({ channel }).then((r) => r.channel, () => null));
   }
-  return names.get(userId);
+  if (!isPublicChannel(channels.get(channel))) return undefined;
+  return client.chat.getPermalink({ channel, message_ts: ts }).then((r) => r.permalink, () => undefined);
 }
 
 let labelCache = { at: 0, labels: [] };
@@ -164,7 +182,7 @@ async function conversationFeedback(client, logger, { channel, ts, threadTs, mes
   }
   const [feedback, permalink] = await Promise.all([
     threadTranscript(messages, { selectedTs: ts, resolveUser: (id) => displayName(client, id) }),
-    client.chat.getPermalink({ channel, message_ts: ts }).then((r) => r.permalink, () => undefined),
+    publicPermalink(client, channel, ts),
   ]);
   return { feedback, permalink };
 }
@@ -205,6 +223,7 @@ app.command(config.slack.command, async ({ ack, command, client, respond, logger
   const query = command.text.trim();
   const ephemeral = (text) => respond({ response_type: 'ephemeral', text });
   try {
+    if (!(await access(client, command.user_id)).member) return await ephemeral(NOT_A_MEMBER);
     if (query === 'help') return await ephemeral(helpText(await templates.all()));
     const linkMatch = query.match(/^github(?:\s+(\S+))?$/i);
     if (linkMatch) {
@@ -235,6 +254,9 @@ app.command(config.slack.command, async ({ ack, command, client, respond, logger
 
 app.shortcut('raise_github_issue', async ({ ack, shortcut, client, logger }) => {
   await ack();
+  if (!(await access(client, shortcut.user.id)).member) {
+    return client.views.open({ trigger_id: shortcut.trigger_id, view: statusView('Not available', NOT_A_MEMBER) });
+  }
   try {
     await openIssueModal({ client, logger, triggerId: shortcut.trigger_id, userId: shortcut.user.id });
   } catch (err) {
@@ -246,6 +268,9 @@ app.shortcut('raise_github_issue', async ({ ack, shortcut, client, logger }) => 
 // Message shortcut: "Turn into GitHub issue" on any message drafts an issue from its whole thread.
 app.shortcut('issue_from_message', async ({ ack, shortcut, client, logger }) => {
   await ack();
+  if (!(await access(client, shortcut.user.id)).member) {
+    return client.views.open({ trigger_id: shortcut.trigger_id, view: statusView('Not available', NOT_A_MEMBER) });
+  }
   if (!alpie) {
     return client.views.open({
       trigger_id: shortcut.trigger_id,
@@ -327,6 +352,10 @@ const draftButtons = (value, { prefetching }) => ({
  * under way; anything else is answered by Alpie, with a button to turn it into an issue after all.
  */
 async function handleConversation({ client, logger, event, text, isDm }) {
+  if (!(await access(client, event.user)).member) {
+    logger.info(`Ignoring message from ${event.user}: not a member of this workspace`);
+    return;
+  }
   const { channel, ts } = event;
   const thread = event.thread_ts ?? null;
   const value = JSON.stringify({ channel, ts, thread, dm: isDm });
@@ -433,6 +462,9 @@ app.message(async ({ message, client, logger, context }) => {
 
 app.action('mention_draft', async ({ ack, body, action, client, respond, logger }) => {
   await ack();
+  if (!(await access(client, body.user.id)).member) {
+    return respond({ response_type: 'ephemeral', replace_original: false, text: NOT_A_MEMBER });
+  }
   const ref = JSON.parse(action.value);
   const { channel, ts, thread } = ref;
   const entry = prefetched.get(`${channel}:${ts}`);
@@ -466,6 +498,9 @@ app.action('mention_draft', async ({ ack, body, action, client, respond, logger 
 
 app.action('mention_pick', async ({ ack, body, action, client, respond }) => {
   await ack();
+  if (!(await access(client, body.user.id)).member) {
+    return respond({ response_type: 'ephemeral', replace_original: false, text: NOT_A_MEMBER });
+  }
   const ref = JSON.parse(action.value);
   const all = await templates.all();
   await client.views.open({ trigger_id: body.trigger_id, view: pickerFor(all, { metadata: { origin: originFor(ref) } }) });
@@ -508,6 +543,7 @@ app.view(CALLBACK.form, async ({ ack, body, view, client, logger }) => {
   const errors = template
     ? validateAnswers(template, answers)
     : { title: 'This issue template was removed from GitHub. Close the form and start again.' };
+  if (!(await access(client, userId)).member) errors.title = 'Alpieca only works for members of this workspace.';
 
   // Only hit GitHub to check the username when it differs from the one we already know.
   const typed = normalizeLogin(answers[GITHUB_LOGIN_BLOCK]);
@@ -591,9 +627,10 @@ function triage(handler) {
     const { ack, body, respond, logger } = args;
     await ack();
     const ephemeral = (text) => respond({ response_type: 'ephemeral', replace_original: false, text }).catch(() => {});
-    if (config.slack.triageUsers.length && !config.slack.triageUsers.includes(body.user.id)) {
-      return ephemeral(':lock: Only issue triagers can do that. Use *View on GitHub* to follow along.');
-    }
+    const allowed = config.slack.triageUsers.length
+      ? config.slack.triageUsers.includes(body.user.id)
+      : (await access(args.client, body.user.id)).triager;
+    if (!allowed) return ephemeral(':lock: Only issue triagers can do that. Use *View on GitHub* to follow along.');
     try {
       await handler({ ...args, ephemeral, number: Number(args.action.value), ref: cardRef(body) });
     } catch (err) {
@@ -716,6 +753,8 @@ app.error(async (err) => {
   console.error(err);
 });
 
+const identity = await app.client.auth.test();
+Object.assign(home, { teamId: identity.team_id, enterpriseId: identity.enterprise_id ?? null });
 await templates.refresh();
 publicRepo = await github.isPublic().catch(() => true);
 await app.start();

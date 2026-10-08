@@ -88,3 +88,26 @@ test('Alpie Markdown becomes safe Slack mrkdwn', () => {
     '*Status*\n• *#7* is <https://github.com/169Pi/devrel/issues/7|open>\n• ping &lt;!channel&gt; &amp; &lt;@U1&gt;',
   );
 });
+
+test('only workspace members can use Alpieca, and only full members can triage', async () => {
+  const { accessFor, isPublicChannel } = await import('../src/access.js');
+  const home = { teamId: 'T1', enterpriseId: 'E1' };
+  assert.deepEqual(accessFor({ team_id: 'T1' }, home), { member: true, triager: true, reason: null });
+  assert.deepEqual(accessFor({ team_id: 'T1', is_restricted: true }, home), { member: true, triager: false, reason: 'guest' });
+  assert.deepEqual(accessFor({ team_id: 'T1', is_ultra_restricted: true }, home).triager, false);
+  // Another workspace in the same Enterprise Grid org counts as internal.
+  assert.equal(accessFor({ team_id: 'T2', enterprise_user: { enterprise_id: 'E1' } }, home).member, true);
+  // Slack Connect users from other organisations, bots, deleted and unknown users are turned away.
+  assert.deepEqual(accessFor({ team_id: 'T9' }, home), { member: false, triager: false, reason: 'external' });
+  assert.equal(accessFor({ team_id: 'T9', enterprise_user: { enterprise_id: 'E9' } }, home).member, false);
+  assert.equal(accessFor({ team_id: 'T1', is_bot: true }, home).member, false);
+  assert.equal(accessFor({ team_id: 'T1', deleted: true }, home).member, false);
+  assert.equal(accessFor(null, home).member, false);
+  assert.equal(accessFor({ team_id: 'T2' }, { teamId: 'T1', enterpriseId: null }).member, false);
+
+  assert.equal(isPublicChannel({ is_channel: true, is_private: false }), true);
+  assert.equal(isPublicChannel({ is_channel: true, is_private: true }), false);
+  assert.equal(isPublicChannel({ is_im: true }), false);
+  assert.equal(isPublicChannel({ is_mpim: true, is_private: true }), false);
+  assert.equal(isPublicChannel(null), false, 'unknown channels are treated as private');
+});

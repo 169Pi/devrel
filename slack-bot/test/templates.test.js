@@ -57,14 +57,14 @@ test('rendered issue keeps the template layout byte-for-byte', async () => {
   const answers = {
     title: 'Alpie Pager',
     s0f0: 'Alpie Pager',
-    s0f1: 'Vishal Das',
+    s0f1: 'Ada Lovelace',
     s1: 'Pages the on-call\nwhen evals regress.',
     s2: 'Used the eval API.',
     s3f0: 'https://github.com/169Pi/pager',
     s3f1: '',
     s3f2: 'https://docs.example.com',
   };
-  const issue = renderIssue(alpie, answers, { reporter: 'Vishal Das' });
+  const issue = renderIssue(alpie, answers, { reporter: 'Ada Lovelace' });
   assert.equal(issue.title, '[Project]: Alpie Pager');
   assert.deepEqual(issue.labels, ['alpie-core', 'dogfooding', 'showcase']);
 
@@ -75,7 +75,7 @@ test('rendered issue keeps the template layout byte-for-byte', async () => {
 
   assert.match(issue.body, /\* \*\*Live Demo \(if applicable\):\*\* _No response_/);
   assert.match(issue.body, /### 📝 The Elevator Pitch\nPages the on-call\nwhen evals regress\./);
-  assert.match(issue.body, /Raised from Slack by Vishal Das<\/sub>\n\n<!-- alpieca -->\n$/);
+  assert.match(issue.body, /Raised from Slack by Ada Lovelace<\/sub>\n\n<!-- alpieca -->\n$/);
 });
 
 test('title prefix is not doubled and empty optional sections say so', () => {
@@ -96,7 +96,7 @@ test('validation flags non-links and over-long titles', () => {
 
 test('modal views respect Slack limits and round-trip answers', () => {
   for (const t of templates) {
-    const view = formView(t, { authorName: 'Vishal Das' });
+    const view = formView(t, { authorName: 'Ada Lovelace' });
     assert.ok(view.title.text.length <= 24, view.title.text);
     assert.ok(view.blocks.length <= 100);
     const ids = view.blocks.filter((b) => b.type === 'input').map((b) => b.block_id);
@@ -108,8 +108,8 @@ test('modal views respect Slack limits and round-trip answers', () => {
     ]);
     assert.deepEqual(JSON.parse(view.private_metadata), { templateId: t.id, version: t.version });
   }
-  const alpie = formView(byName('Alpie'), { authorName: 'Vishal Das' });
-  assert.equal(alpie.blocks.find((b) => b.block_id === 's0f1').element.initial_value, 'Vishal Das');
+  const alpie = formView(byName('Alpie'), { authorName: 'Ada Lovelace' });
+  assert.equal(alpie.blocks.find((b) => b.block_id === 's0f1').element.initial_value, 'Ada Lovelace');
 
   const picker = pickerView(templates, { repo: '169Pi/devrel' });
   assert.equal(picker.blocks[1].element.options.length, 2);
