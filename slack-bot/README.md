@@ -1,105 +1,199 @@
 # Alpieca 🦙
 
-*Slack ↔ GitHub, the woolly way.* Alpieca is 169Pi's Slack app. PR alerts trot in from GitHub, issues trot out to GitHub, and Alpie turns any thread into a template-ready issue.
+**Slack ↔ GitHub, the woolly way.** Alpieca is the Slack app [169Pi](https://github.com/169Pi) uses to turn conversations into well-formed GitHub issues. People describe a bug or an idea in Slack, or point at a thread. [Alpie](https://huggingface.co/169Pi/Alpie-Core) drafts the issue from the repo's own issue templates, a human reviews it, and the issue lands in GitHub. Issues opened directly on GitHub show up in Slack too, with buttons to triage them.
 
-Lets anyone in Slack raise an issue in [`169Pi/devrel`](https://github.com/169Pi/devrel) through a form generated from the repo's own [issue templates](../.github/ISSUE_TEMPLATE). Issues land with the template's exact headings, title prefix, labels and assignees, so they look the same as issues opened from GitHub's **New issue** page.
+It's built to be forked. Everything specific to us (the repo, the templates, the command name) is configuration, so you can run the same setup for your own project and Slack workspace.
 
-## How people use it
+## What it does
 
-- `/alpieca` opens a picker for every template in the repo, then a form for the one you choose.
-- `/alpieca merch` or `/alpieca showcase` skips the picker.
-- `/alpieca help` lists the templates.
-- The **Raise a GitHub issue** shortcut in Slack's ⚡ menu does the same as `/alpieca`.
-- `/alpieca <describe it in your own words>`, or the picker's *describe it* box: Alpie drafts the issue for you (see below).
-- **More actions (⋯) → Turn into GitHub issue** on any message: Alpie drafts an issue from that message and its whole thread.
-- **@Alpieca** in a message or thread: Alpieca privately offers to draft an issue from that conversation.
-- `/alpieca github <username>` links your GitHub account. You're also asked for it the first time you raise an issue.
+- **Forms built from your issue templates.** `/alpieca` reads `.github/ISSUE_TEMPLATE/*.md` straight from GitHub and turns each template into a Slack form. Edit a template and the form updates within minutes, no redeploy.
+- **Drafting with Alpie.** Describe the problem in your own words, @mention Alpieca in a thread, or use *Turn into GitHub issue* on any message. Alpie fills in the template from what was actually said, adds useful context for maintainers, and you review everything before it's filed.
+- **Ask it things.** DM Alpieca or @mention it with a question ("are there any merch ideas filed already?"). Alpie answers from the templates and recent issues.
+- **Issue cards with triage buttons.** Every new issue, whether filed from Slack or opened on GitHub, appears in Slack as a card with **Assign to me**, **Label**, **Comment** and **Close/Reopen**.
+- **Credit for the reporter.** Issues @mention the reporter's GitHub account, not just the bot's.
 
-After you submit, Alpieca posts an **issue card** (title, labels, a preview of the body, and triage buttons) where you raised it: the channel you ran `/alpieca` in, or the thread you mentioned it in or used the shortcut on. In private channels Alpieca hasn't been invited to, and for the ⚡ shortcut, the card comes to you as a DM instead. If GitHub rejects the issue, Alpieca DMs you everything you typed, so you don't lose your answers.
+```mermaid
+flowchart LR
+  subgraph Slack
+    A["/alpieca, @mention, DM<br/>or message shortcut"] --> B["Form built from<br/>the issue template"]
+    C["Issue card with<br/>triage buttons"]
+  end
+  B -- "free text or a thread" --> D["Alpie drafts<br/>(you review)"]
+  D --> B
+  B -- "Create issue" --> E[(GitHub issues)]
+  E -- "card for the new issue" --> C
+  C -- "assign, label, comment, close" --> E
+  F["Issue opened on GitHub"] -- "GitHub Action" --> C
+```
 
-## Who raised it
+## Using it
 
-Every issue is opened by the bot's GitHub token, so on GitHub it looks like the token's owner opened all of them. To credit the real person, the form asks each reporter for their GitHub username once, checks that the account exists, and remembers it. The issue footer then reads *Raised from Slack by Priya (@priya-dev)*. The @mention notifies and subscribes them on GitHub, and the Slack card shows them as the author, not the token owner.
+| In Slack | What happens |
+| --- | --- |
+| `/alpieca` | Pick a template, then fill in the form generated from it. |
+| `/alpieca merch` | Jump straight to a template by name. |
+| `/alpieca <describe the issue>` | Alpie picks the template and drafts the issue for you to review. |
+| **More actions → Turn into GitHub issue** on a message | Alpie drafts an issue from that message and its whole thread. |
+| `@Alpieca` in a channel or thread, or a DM | Something to raise gets a private *Review Alpie's draft* button; a question gets an answer in the thread. A bare `@Alpieca` in a thread means "turn this thread into an issue". |
+| `/alpieca github <username>` | Link your GitHub account (you're also asked the first time you file). |
+| `/alpieca help` | Lists the templates and these options. |
 
-## Issue cards and triage
+After an issue is created, Alpieca posts its **card** where you raised it: the channel, the thread, or your DM. It also posts to a team channel if you've configured one.
 
-Cards have **View on GitHub**, **🙋 Assign to me**, **🏷️ Label**, **💬 Comment** and **✅ Close** (or **↩️ Reopen**) buttons. Each action happens on GitHub, then the card refreshes from GitHub with a note like *Closed by @Rahul*. Comments are posted with the commenter's name and GitHub username, and quoted in the card's thread. *Assign to me* needs a linked GitHub account and repo access. Set `SLACK_TRIAGE_USERS` to limit the buttons to specific people.
+### Issue cards and triage
 
-**Issues opened directly on GitHub** get the same card, posted by the [`alpieca-new-issue`](../.github/workflows/alpieca-new-issue.yml) workflow. Issues filed from Slack carry a hidden `<!-- alpieca -->` marker, so they're never posted twice. To set it up, go to the repo's **Settings → Secrets and variables → Actions** and add:
-- **Secret `SLACK_BOT_TOKEN`:** Alpieca's `xoxb-…` token. It must be Alpieca's, so that button clicks reach the bot.
-- **Variable `SLACK_ISSUES_CHANNEL`:** the channel ID (`C…`) for new issues. Invite `@Alpieca` there, and set the bot's `SLACK_NOTIFY_CHANNEL` to the same channel so issues from both sources land together.
+Cards show the title, state, labels, reporter and a short preview, plus **View on GitHub**, **🙋 Assign to me**, **🏷️ Label**, **💬 Comment** and **✅ Close** (or **↩️ Reopen**). Each action happens on GitHub, then the card refreshes from GitHub with a note such as *Closed by @Rahul*. Comments are posted with the commenter's name and GitHub username, and are quoted in the card's thread.
 
+Issues opened directly on GitHub are posted as the same card by the [`alpieca-new-issue`](../.github/workflows/alpieca-new-issue.yml) workflow. Issues filed from Slack carry a hidden `<!-- alpieca -->` marker, so they're never posted twice.
 
-## Drafting with Alpie
+## How templates become forms
 
-When `ALPIE_API_KEY` is set, [Alpie](https://huggingface.co/169Pi/Alpie-Core) (`alpie-32b` via `api.169pi.com`) turns rough feedback or a Slack thread into the template:
-
-1. The reporter writes freely or picks a message. Alpie gets the template fields and the feedback. If no template was chosen, Alpie also picks the one that fits best.
-2. Alpie fills in what the feedback supports and writes an **Additional context** section for maintainers: who else was involved, constraints or deadlines mentioned, and open questions or missing details to follow up on.
-3. The reporter sees the pre-filled form and edits it. **Nothing is filed until they click _Create issue_.** Required fields Alpie couldn't answer are left blank, so Slack makes the reporter fill them in.
-
-The bot doesn't trust Alpie's output blindly:
-
-- It keeps only fields the template defines, strips the title prefix, and enforces Slack's length limits.
-- It drops any link that didn't appear in the original feedback, so a made-up demo URL never reaches GitHub.
-- Feedback is passed to Alpie as data, so instructions written inside a message are ignored.
-- The repo is public. Alpie is told to leave out secrets and personal details, and the form warns the reporter to check before filing.
-- If Alpie errors, times out, or nothing fits, the reporter falls back to the manual form or the picker, and their original text is kept.
-
-Drafted issues end with an `🤖 Additional context` section and a footer linking back to the Slack thread.
-
-## How templates turn into forms
-
-The bot reads `.github/ISSUE_TEMPLATE/*.md` from GitHub, not from a bundled copy, and caches them for 5 minutes. When a template is added or edited on the default branch, Slack shows the change automatically. No redeploy is needed.
+Alpieca works with GitHub's Markdown issue templates as they are. No extra configuration is needed.
 
 | In the template | In Slack |
 | --- | --- |
-| `title: "[Project]: <…>"` | **Title** field. The issue is titled `[Project]: <what you typed>`. |
-| `### Heading` + `*italic guidance*` | Multi-line text box, with the guidance shown as a hint |
-| `* **Field:**` bullets under a heading | One single-line input per bullet |
-| `(Optional)` / `(if applicable)` in a heading or bullet | Optional input. Everything else is required. |
-| Bullet named like *Repo / Link / Demo / Docs / URL* | Must contain an `https://` link |
-| Bullet named like *Mastermind / Author / Owner* | Pre-filled with the reporter's Slack name |
-| `labels:` / `assignees:` | Applied to the issue. If GitHub drops any labels, the bot warns you. |
+| `title: "[Project]: <…>"` | A **Title** field. The issue is titled `[Project]: <what you typed>`. |
+| `### Heading` followed by `*italic guidance*` | A multi-line box, with the guidance shown as a hint. |
+| `* **Field:**` bullets under a heading | One single-line input per bullet. |
+| `(Optional)` or `(if applicable)` in a heading or bullet | An optional input. Everything else is required. |
+| A bullet named like *Repo*, *Link*, *Demo*, *Docs* or *URL* | Must contain an `https://` link. |
+| A bullet named like *Author*, *Owner* or *Mastermind* | Pre-filled with the reporter's Slack name. |
+| `labels:` and `assignees:` | Applied to the issue. If GitHub drops a label, the card says so. |
 
-Empty optional answers are written as `_No response_`, as GitHub issue forms do. A `Raised from Slack by <name>` footer records who filed the issue.
+The issue is written back in the template's exact layout (same headings, bullets and prefix), so it looks the same as one opened from GitHub's **New issue** page. Unanswered optional fields read `_No response_`.
+
+## Drafting with Alpie
+
+Alpie is optional. Without an API key, Alpieca still works, with plain forms.
+
+With a key, Alpie gets the template's fields and the feedback (free text or a Slack thread). It picks a template if none was chosen, fills in what the feedback supports, and adds an **Additional context** section: who else was involved, constraints that were mentioned, and open questions for a maintainer. **Nothing is filed until a person reviews the draft and clicks *Create issue*.**
+
+The bot doesn't take Alpie's output on trust:
+
+- **Fields:** only fields the template defines are kept. Slack's length limits are enforced, and title prefixes are handled by the bot, not the model.
+- **Links:** any link that wasn't in the original conversation is removed, so made-up URLs never reach GitHub. Answers can only link to real issues, the repo, or the conversation.
+- **Instructions inside messages:** Slack content is passed to Alpie as data, so instructions written in a message are ignored.
+- **Invented reasons:** the prompt tells Alpie not to make up reasons or pitches that nobody gave.
+- **Failures:** if Alpie fails or times out, the reporter falls back to the normal form, and their original text is kept.
+
+**Speed.** Alpie is a reasoning model, so a draft or answer takes about 10–20 seconds. Alpieca hides most of that wait in two ways:
+- **Drafting ahead:** when an @mention or DM sounds like something to raise, drafting starts immediately, before anyone clicks.
+- **Live loading animation:** Alpie's output is streamed, so the form and the answer message show the current stage, a 🦙 moving along a progress track, and elapsed seconds. Answers fill in as they're written.
+
+**Other models.** The Alpie client speaks the OpenAI-style `/chat/completions` API, with optional streaming. Point `ALPIE_BASE_URL` and `ALPIE_MODEL` at another compatible endpoint if you prefer. It handles reasoning models that think out loud before `</think>`, as well as models that don't.
+
+## Access and privacy
+
+Issues land in a **public** repo under the bot's GitHub token, so access is deliberately narrow:
+
+- **Workspace members only.** People from other organizations (for example in Slack Connect channels) can't file issues, use Alpie, or press triage buttons. Messages from them are ignored.
+- **Triage buttons are for full members.** Guests can raise issues but can't assign, label, comment on or close them. Set `SLACK_TRIAGE_USERS` to limit triage to specific people.
+- **Private conversations stay private.** An issue drafted from a public channel links back to its source thread. Issues drafted from private channels and DMs don't include a link.
+- **Reporters see a warning.** Before filing a draft, the form reminds them the repo is public and that their name and GitHub username will appear on the issue.
+- **Content from GitHub is escaped.** Issue titles and bodies can't ping `@channel` or fake links in Slack.
+
+## Fork it for your team
+
+1. **Copy `slack-bot/`, the workflow, and your issue templates** into your repo. Alpieca reads whatever is in `.github/ISSUE_TEMPLATE/`.
+2. **Edit [`manifest.yml`](manifest.yml):** change the app name, descriptions, slash command and repo mentions. If you change the command, set `SLACK_COMMAND` to match.
+3. **Create the Slack app** from the manifest (below).
+4. **Set `GITHUB_REPO`** to your `owner/repo`, and decide whether you want Alpie (or another compatible model) for drafting.
+5. **Run it** wherever you can keep one small process running (below).
 
 ## Setup
 
-1. **Create the Slack app.** Go to [api.slack.com/apps](https://api.slack.com/apps) → *Create New App* → *From an app manifest*, and paste [`manifest.yml`](manifest.yml). Install it to the workspace. Whenever the manifest's scopes or events change (e.g. this version adds `chat:write.public`, `app_mentions:read` and the `app_mention` event), paste it again and **Reinstall to Workspace**. Invite the bot to channels where you'll use *Turn into GitHub issue* (`/invite @Alpieca`) so it can read whole threads. Otherwise Alpie drafts from the selected message only.
-   - **Bot token:** *OAuth & Permissions* → *Bot User OAuth Token* (`xoxb-…`) → `SLACK_BOT_TOKEN`
-   - **App token:** *Basic Information* → *App-Level Tokens* → create one with `connections:write` (`xapp-…`) → `SLACK_APP_TOKEN`
+### 1. Slack app
+At [api.slack.com/apps](https://api.slack.com/apps), choose **Create New App → From an app manifest**, paste [`manifest.yml`](manifest.yml), and install it to your workspace.
+- **Bot token:** *OAuth & Permissions → Bot User OAuth Token* (`xoxb-…`) → `SLACK_BOT_TOKEN`
+- **App token:** *Basic Information → App-Level Tokens* → generate one with `connections:write` (`xapp-…`) → `SLACK_APP_TOKEN`
 
-   **Upgrading the existing "169pi PR Bot" app instead:** open it at api.slack.com/apps → **App Manifest**, replace the whole manifest with [`manifest.yml`](manifest.yml), and save. That renames it to Alpieca and adds the issue features. Then **Reinstall to Workspace** to grant the new scopes. The manifest keeps the `incoming-webhook` scope, so the `SLACK_WEBHOOK_URL` used by the PR notifier in `169Pi/.github` keeps working. Don't *uninstall* the app, because that revokes the webhook. Socket Mode is already on there, so reuse its app-level token if one exists.
-2. **Create a GitHub token.** Make a [fine-grained PAT](https://github.com/settings/personal-access-tokens/new) (or a GitHub App installation token) limited to `169Pi/devrel` with **Issues: Read and write** and **Contents: Read** → `GITHUB_TOKEN`. Issues are created as the token's owner, so a dedicated bot account keeps attribution tidy.
-3. **(Optional) Turn on Alpie.** Create a key at [playground.169pi.ai](https://playground.169pi.ai/dashboard/api-keys) → `ALPIE_API_KEY`. Without it, the bot runs as plain forms.
-4. **Run it:**
+Whenever the manifest's scopes or events change, paste it again and **Reinstall to Workspace**. Invite the bot to channels where you'll use it on threads (`/invite @Alpieca`).
 
-   ```bash
-   cp .env.example .env   # fill in the tokens
-   npm install
-   npm run dev            # or: npm start / docker build -t alpieca . && docker run --env-file .env alpieca
-   ```
+### 2. GitHub token
+Create a [fine-grained personal access token](https://github.com/settings/personal-access-tokens/new), or a GitHub App installation token, limited to your repo:
+- **Issues:** Read and write
+- **Contents:** Read-only
 
-The bot uses Socket Mode, so it needs no public URL or ingress and can run on any always-on host. To use HTTP instead, leave `SLACK_APP_TOKEN` empty, set `SLACK_SIGNING_SECRET`, and point the app's Request URL at `https://<host>/slack/events`.
+Issues are opened as the token's owner, so a dedicated bot account keeps things tidy. If the repo belongs to an organization, an org owner may need to approve the token. Until they do, it can read but not write.
 
-Optional settings: `SLACK_NOTIFY_CHANNEL` posts every new issue to a team channel. `GITHUB_TEMPLATE_REF` reads templates from a branch other than the default. `TEMPLATE_DIR` reads templates from disk. See [`.env.example`](.env.example).
+### 3. Alpie (optional)
+Create a key at [playground.169pi.ai](https://playground.169pi.ai/dashboard/api-keys) → `ALPIE_API_KEY`.
 
-## Deploying on AWS
+### 4. Run it locally
+```bash
+cp .env.example .env    # fill in the tokens
+npm install
+npm run dev
+```
+You should see `Alpieca running (Socket Mode), filing into <owner/repo>`. Try `/alpieca help` in Slack.
 
-Alpieca runs on one small EC2 instance. It needs no inbound ports, load balancer or public URL, because Socket Mode connects outbound only. Secrets live in SSM Parameter Store and are never written to disk. You manage the instance through Session Manager, so there are no SSH keys. [`deploy/aws/user-data.sh`](deploy/aws/user-data.sh) does all of the server setup on first boot.
+### 5. Post GitHub-opened issues to Slack (optional)
+In your repo's **Settings → Secrets and variables → Actions**, add:
+- **Secret `SLACK_BOT_TOKEN`:** the bot's `xoxb-…` token, so button clicks reach the running bot.
+- **Variable `SLACK_ISSUES_CHANNEL`:** the channel's **ID** (`C…`, from the channel's *About* tab), not its name.
 
-1. **Secrets:** in **Systems Manager → Parameter Store**, create these as `SecureString`: `/alpieca/SLACK_BOT_TOKEN`, `/alpieca/SLACK_APP_TOKEN`, `/alpieca/GITHUB_TOKEN`, `/alpieca/ALPIE_API_KEY`. Any other variable from `.env.example` works the same way, e.g. `/alpieca/SLACK_NOTIFY_CHANNEL`.
-2. **Instance role:** in **IAM → Roles → Create role → EC2**, attach `AmazonSSMManagedInstanceCore` and add [`deploy/aws/iam-policy.json`](deploy/aws/iam-policy.json) as an inline policy. Name the role `alpieca-ec2`.
-3. **Launch:** create an **Amazon Linux 2023 (arm64)** instance of type `t4g.micro`. Pick no key pair, a security group with **no inbound rules**, and a public IP. Set the IAM instance profile to `alpieca-ec2`, and paste `user-data.sh` into **Advanced details → User data**.
-4. **Verify:** **Connect → Session Manager**, then run `sudo journalctl -u alpieca -f`. You should see `Alpieca running (Socket Mode)…`. Stop any other running copy, such as a laptop, because only one instance should run at a time.
+Invite the bot to that channel. Set the bot's `SLACK_NOTIFY_CHANNEL` to the same ID so issues from Slack and from GitHub land in one place.
 
-- **Deploy a new version:** run `sudo alpieca-update` in Session Manager. It pulls `main`, installs dependencies and restarts.
-- **Rotate a secret:** update the parameter, then run `sudo systemctl restart alpieca`.
-- **Cost:** roughly $7–10 a month: the instance (about $3 for a `t4g.nano`, $6 for a `t4g.micro`), plus about $3.65 for the public IPv4 address that outbound traffic needs, plus under $1 for an 8 GB disk. The bot uses about 100 MB of RAM, so a `t4g.nano` (0.5 GB) works if you want the lowest cost.
+## Configuration
+
+| Variable | Required | What it does |
+| --- | --- | --- |
+| `SLACK_BOT_TOKEN` | yes | Bot token (`xoxb-…`). |
+| `SLACK_APP_TOKEN` | for Socket Mode | App-level token (`xapp-…`) with `connections:write`. |
+| `SLACK_SIGNING_SECRET`, `PORT` | for HTTP mode | Use instead of `SLACK_APP_TOKEN` to receive events over HTTP at `/slack/events`. |
+| `GITHUB_TOKEN` | yes | Fine-grained token with Issues read/write and Contents read. |
+| `GITHUB_REPO` | | `owner/repo` to file into. Defaults to `169Pi/devrel`. |
+| `GITHUB_TEMPLATE_REF` | | Branch to read templates from. Defaults to the default branch. |
+| `ALPIE_API_KEY` | | Turns on drafting and answers. |
+| `ALPIE_BASE_URL`, `ALPIE_MODEL`, `ALPIE_TIMEOUT_SECONDS` | | Defaults: `https://api.169pi.com/v1`, `alpie-32b`, `90`. |
+| `SLACK_COMMAND` | | Defaults to `/alpieca`. Must match the manifest. |
+| `SLACK_NOTIFY_CHANNEL` | | Channel ID that also gets every new issue card. |
+| `SLACK_TRIAGE_USERS` | | Comma-separated Slack user IDs allowed to triage. Defaults to all full members. |
+| `DATA_DIR` | | Where Slack-to-GitHub username links are stored. Defaults to `~/.alpieca`. Keep it on persistent storage. |
+| `TEMPLATE_DIR`, `TEMPLATE_CACHE_SECONDS` | | Read templates from disk instead of GitHub, and how long to cache them. Defaults: GitHub, 300 s. |
+
+## Hosting
+
+Alpieca is one small Node.js process (about 100 MB of RAM). In Socket Mode it only makes **outbound** connections, so it needs **no public URL, inbound ports or load balancer**. Any always-on machine works: a small VM or VPS, a container platform, or a server you already have. Three things matter wherever you run it:
+
+- **Exactly one instance.** Two copies would split Slack's events between them.
+- **Persistent `DATA_DIR`.** It holds the Slack-to-GitHub username links.
+- **Secrets as environment variables.** Inject them from your platform's secret store, or from a file only the service can read. Never bake them into an image.
+
+**Docker:**
+```bash
+docker build -t alpieca .
+docker run -d --name alpieca --restart unless-stopped --env-file .env -v alpieca-data:/data alpieca
+```
+
+**systemd on a Linux server:** see [`deploy/alpieca.service`](deploy/alpieca.service). The setup steps are in its header comment, and secrets go in `/etc/alpieca.env` with mode `600`. View logs with `journalctl -u alpieca -f`. To update, run `git pull && npm ci --omit=dev`, then `systemctl restart alpieca`.
 
 ## Development
 
 ```bash
-npm test   # real templates in ../.github/ISSUE_TEMPLATE, rendering, Slack limits, and Alpie parsing against a fake API
+npm test
 ```
+
+The tests parse the real templates in `../.github/ISSUE_TEMPLATE`. They cover:
+- rendering issues back into each template's layout
+- Slack Block Kit limits
+- Alpie reply parsing and link filtering, using a fake streaming API
+- intent detection, the loading animation, and access rules
+- the GitHub workflow script, run against a fake Slack API
+
+| Path | What's in it |
+| --- | --- |
+| `src/app.js` | Slack handlers: commands, shortcuts, mentions, DMs, forms and triage buttons. |
+| `src/templates.js` | Parses issue templates, validates answers, and renders issues. |
+| `src/modal.js` | Slack forms. |
+| `src/issue-card.js` | Issue cards. Has no dependencies, because the GitHub workflow uses it too. |
+| `src/alpie.js` | The Alpie client: drafting, answers, streaming, and output checks. |
+| `src/progress.js` | The loading animation. |
+| `src/access.js` | Who may use the bot, and which channels are public. |
+| `src/people.js` | Stored Slack-to-GitHub username links. |
+| `src/github.js` | GitHub API calls. |
+| `scripts/post-github-issue.js` | Run by the workflow to post GitHub-opened issues to Slack. |
+
+## License
+
+Copyright 2026 169Pi. Alpieca is licensed under the [Apache License 2.0](LICENSE): fork it, adapt it, and run it for your own team. The license applies to the code in this `slack-bot/` folder.

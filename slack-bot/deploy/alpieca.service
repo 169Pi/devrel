@@ -1,0 +1,30 @@
+# systemd unit for running Alpieca on any Linux server.
+#
+#   sudo useradd --system --create-home --home-dir /var/lib/alpieca --shell /usr/sbin/nologin alpieca
+#   sudo git clone https://github.com/<you>/<repo>.git /opt/alpieca && sudo chown -R alpieca: /opt/alpieca
+#   sudo -u alpieca -H bash -c 'cd /opt/alpieca/slack-bot && npm ci --omit=dev'
+#   sudo install -m 600 -o alpieca /dev/null /etc/alpieca.env   # then put your variables in it (see .env.example)
+#   sudo cp deploy/alpieca.service /etc/systemd/system/ && sudo systemctl enable --now alpieca
+#   sudo journalctl -u alpieca -f
+#
+# Adjust the paths if you cloned elsewhere. Node.js 20+ must be on the PATH.
+[Unit]
+Description=Alpieca Slack bot
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=alpieca
+WorkingDirectory=/opt/alpieca/slack-bot
+EnvironmentFile=/etc/alpieca.env
+Environment=DATA_DIR=/var/lib/alpieca
+ExecStart=/usr/bin/env node src/app.js
+Restart=always
+RestartSec=10
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -95,7 +95,7 @@ export function formView(
   const blocks = [];
   if (banner) blocks.push(notice(banner));
   if (publicRepo && (drafted || source)) {
-    blocks.push(notice(':eyes: This repo is *public*. Check the draft for anything internal before creating the issue.'));
+    blocks.push(notice(':eyes: This repo is *public*. Check the draft for anything internal before creating the issue. Your name and GitHub username will appear on it.'));
   }
   const meta = [template.about, template.labels.length && `Labels: ${template.labels.map((l) => `\`${l}\``).join(' ')}`]
     .filter(Boolean)

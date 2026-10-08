@@ -47,6 +47,21 @@ export function createGitHub({ token, repo, ref, logger = console }) {
       }
     },
 
+    /** Recently updated issues (not PRs), as context for answering questions. */
+    async recentIssues(limit = 25) {
+      const { data } = await octokit.issues.listForRepo({ owner, repo: name, state: 'all', sort: 'updated', per_page: 50 });
+      return data
+        .filter((i) => !i.pull_request)
+        .slice(0, limit)
+        .map((i) => ({
+          number: i.number,
+          title: i.title,
+          state: i.state,
+          url: i.html_url,
+          labels: i.labels.map((l) => (typeof l === 'string' ? l : l.name)),
+        }));
+    },
+
     async getIssue(number) {
       return (await octokit.issues.get({ owner, repo: name, issue_number: number })).data;
     },

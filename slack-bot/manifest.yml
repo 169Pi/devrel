@@ -1,7 +1,7 @@
-# Alpieca 🦙: 169Pi's Slack <-> GitHub app.
-# Paste this as the whole manifest of the existing "169pi PR Bot" app (api.slack.com/apps -> App Manifest),
-# or use it to create a fresh app ("Create New App" -> "From an app manifest").
-# incoming-webhook keeps the PR notifier in 169Pi/.github (SLACK_WEBHOOK_URL) working.
+# Alpieca 🦙: a Slack app that raises GitHub issues from your repo's issue templates.
+# Create the app at api.slack.com/apps -> "Create New App" -> "From an app manifest" and paste this.
+# Forking? Change the name, descriptions, slash command and repo mentions to match your project.
+# `incoming-webhook` is optional: it only matters if a separate workflow posts to Slack via a webhook.
 display_information:
   name: Alpieca
   description: Slack ↔ GitHub, the woolly way. PRs trot in, issues trot out, and Alpie turns any thread into a template-ready issue.
@@ -16,7 +16,7 @@ features:
   app_home:
     home_tab_enabled: false
     messages_tab_enabled: true
-    messages_tab_read_only_enabled: true
+    messages_tab_read_only_enabled: false
   bot_user:
     display_name: Alpieca
     always_online: true
@@ -37,7 +37,7 @@ features:
 oauth_config:
   scopes:
     bot:
-      # PR notifications from 169Pi/.github (slack-pr-notify.yml)
+      # Optional: lets other tools (e.g. a CI workflow) post to a channel via an incoming webhook
       - incoming-webhook
       # Issue raising
       - commands
@@ -52,11 +52,18 @@ oauth_config:
       - groups:history
       - im:history
       - mpim:history
+      # Check whether a channel is public before linking to it from a (public) GitHub issue
+      - channels:read
+      - groups:read
+      - im:read
+      - mpim:read
   pkce_enabled: false
 settings:
   event_subscriptions:
     bot_events:
       - app_mention
+      # Direct messages to Alpieca (questions and issue ideas)
+      - message.im
   interactivity:
     is_enabled: true
   org_deploy_enabled: false
