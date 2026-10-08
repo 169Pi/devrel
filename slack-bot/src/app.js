@@ -16,6 +16,7 @@ import {
   statusView,
 } from './modal.js';
 import { createPeopleStore, GITHUB_LOGIN, normalizeLogin } from './people.js';
+import { createProgress, startTicker, statusLine } from './progress.js';
 import { looksLikeIssue, markdownToMrkdwn, threadTranscript } from './slack-text.js';
 import {
   createTemplateStore,
@@ -73,8 +74,12 @@ async function checkGithubLogin(value) {
   return { login };
 }
 
-const draftingView = (what) =>
-  statusView('Alpie is drafting…', `:sparkles: Alpie is turning ${what} into an issue draft. This usually takes 10–30 seconds.`);
+/** The "Alpie is drafting…" modal. With progress, it's one frame of the loading animation. */
+const draftingView = (what, progress = createProgress(), tick = 0) =>
+  statusView(
+    'Alpie is drafting…',
+    `${statusLine(progress, tick, 'draft')}\n\n_Turning ${what} into an issue draft. This usually takes 10–20 seconds._`,
+  );
 
 const formFor = (template, userId, authorName, opts = {}) =>
   formView(template, { authorName, githubLogin: people.githubFor(userId), publicRepo, ...opts });
@@ -88,11 +93,23 @@ const pickerFor = (all, opts = {}) => pickerView(all, { repo, alpie: Boolean(alp
  * `origin` ({ channel, thread }) is where the confirmation card gets posted.
  * `pending` is a draft already started in the background (see prefetchDraft).
  */
-async function draftIntoView({ client, logger, viewId, userId, feedback, template, source, origin, pending }) {
+async function draftIntoView({ client, logger, viewId, userId, feedback, template, source, origin, pending, progress, what = 'this' }) {
   const [all, authorName] = await Promise.all([templates.all(), displayName(client, userId)]);
+  // A background draft brings its own progress; otherwise track this one as it streams.
+  const live = progress ?? createProgress();
+  const stopAnimation = startTicker(
+    (tick) => client.views.update({ view_id: viewId, view: draftingView(what, live, tick) }),
+    { intervalMs: 1500 },
+  );
   let view;
   try {
-    const draft = await (pending ?? alpie.draft({ templates: template ? [template] : all, feedback, reporter: authorName }));
+    const draft = await (pending ??
+      alpie.draft({
+        templates: template ? [template] : all,
+        feedback,
+        reporter: authorName,
+        onProgress: (p) => Object.assign(live, p),
+      })).finally(stopAnimation);
     view = formFor(draft.template, userId, authorName, {
       initial: draft.answers,
       extraContext: draft.additionalContext,
@@ -124,7 +141,7 @@ async function openIssueModal({ client, logger, triggerId, userId, query, origin
   if (query && alpie) {
     // Free text after the command: treat it as feedback. The trigger expires in 3s, so open a placeholder first.
     const { view } = await client.views.open({ trigger_id: triggerId, view: draftingView('your feedback') });
-    return draftIntoView({ client, logger, viewId: view.id, userId, feedback: query, origin });
+    return draftIntoView({ client, logger, viewId: view.id, userId, feedback: query, origin, what: 'your feedback' });
   }
   await client.views.open({ trigger_id: triggerId, view: pickerFor(all, { metadata: { origin } }) });
 }
@@ -253,6 +270,7 @@ app.shortcut('issue_from_message', async ({ ack, shortcut, client, logger }) => 
       feedback,
       source: permalink,
       origin: { channel, thread: message.thread_ts ?? message.ts },
+      what: 'this conversation',
     });
   } catch (err) {
     logger.error(err);
@@ -265,19 +283,20 @@ app.shortcut('issue_from_message', async ({ ack, shortcut, client, logger }) => 
 
 // Alpie takes ~12-15s to draft, almost all of it reasoning. When a message looks like an issue,
 // start drafting straight away so the wait mostly happens before anyone clicks.
-const prefetched = new Map(); // "channel:ts" -> { prep: Promise<{ feedback, permalink }>, draft: Promise<draft>, userId }
+const prefetched = new Map(); // "channel:ts" -> { prep, draft, progress, userId }
 const PREFETCH_TTL_MS = 15 * 60_000;
 
 function prefetchDraft(client, logger, { channel, ts, threadTs, userId }) {
   const key = `${channel}:${ts}`;
+  const progress = createProgress();
   const prep = conversationFeedback(client, logger, { channel, ts, threadTs });
   const draft = Promise.all([prep, templates.all(), displayName(client, userId)]).then(([{ feedback }, all, reporter]) =>
-    alpie.draft({ templates: all, feedback, reporter }),
+    alpie.draft({ templates: all, feedback, reporter, onProgress: (p) => Object.assign(progress, p) }),
   );
   // Failures are reported when someone clicks; don't let an unclicked one crash the process.
   prep.catch(() => {});
   draft.catch(() => {});
-  prefetched.set(key, { prep, draft, userId });
+  prefetched.set(key, { prep, draft, progress, userId });
   setTimeout(() => prefetched.delete(key), PREFETCH_TTL_MS).unref();
 }
 
@@ -356,7 +375,14 @@ async function handleConversation({ client, logger, event, text, isDm }) {
   }
 
   // Questions: post a placeholder right away, then swap in Alpie's answer.
-  const placeholder = await publicly({ text: ':llama: _Thinking…_' });
+  const progress = createProgress();
+  const frame = (tick) => {
+    const partial = progress.phase === 'writing' && progress.output.trim();
+    const text = partial ? `${markdownToMrkdwn(partial).slice(0, 2900)} ▍` : statusLine(progress, tick, 'answer');
+    return { text, blocks: [{ type: 'section', text: { type: 'mrkdwn', text } }] };
+  };
+  const placeholder = await publicly({ ...frame(0), unfurl_links: false });
+  const stopAnimation = startTicker((tick) => client.chat.update({ channel: placeholder.channel, ts: placeholder.ts, ...frame(tick) }));
   let answer;
   try {
     const [{ feedback: conversation }, all, issues] = await Promise.all([
@@ -364,11 +390,15 @@ async function handleConversation({ client, logger, event, text, isDm }) {
       templates.all(),
       github.recentIssues().catch(() => []),
     ]);
-    answer = markdownToMrkdwn(await alpie.answer({ repo, conversation, templates: all, issues })).slice(0, 2900);
+    progress.phase = 'thinking';
+    const reply = await alpie.answer({ repo, conversation, templates: all, issues, onProgress: (p) => Object.assign(progress, p) });
+    answer = markdownToMrkdwn(reply).slice(0, 2900);
   } catch (err) {
     logger.warn(`Alpie answer failed: ${err.message}`);
     answer = `:warning: Sorry, I couldn't answer that right now (${err instanceof AlpieError ? err.message : 'something went wrong'}).`;
   }
+  // Stop the animation (and wait for any frame in flight) before showing the final answer.
+  await stopAnimation();
   await client.chat
     .update({
       channel: placeholder.channel,
@@ -406,7 +436,11 @@ app.action('mention_draft', async ({ ack, body, action, client, respond, logger 
   const ref = JSON.parse(action.value);
   const { channel, ts, thread } = ref;
   const entry = prefetched.get(`${channel}:${ts}`);
-  const { view } = await client.views.open({ trigger_id: body.trigger_id, view: draftingView('this conversation') });
+  const reuse = entry?.userId === body.user.id;
+  const { view } = await client.views.open({
+    trigger_id: body.trigger_id,
+    view: draftingView('this conversation', reuse ? entry.progress : undefined),
+  });
   // Remove the offer once used; keep answers, which other people in the thread may still read.
   if (action.block_id === 'issue_offer') respond({ delete_original: true }).catch(() => {});
   try {
@@ -420,7 +454,9 @@ app.action('mention_draft', async ({ ack, body, action, client, respond, logger 
       source: permalink,
       origin: originFor(ref),
       // Reuse the background draft only for the person it was started for (it's written as them).
-      pending: entry?.userId === body.user.id ? entry.draft : undefined,
+      pending: reuse ? entry.draft : undefined,
+      progress: reuse ? entry.progress : undefined,
+      what: 'this conversation',
     });
   } catch (err) {
     logger.error(err);
@@ -451,7 +487,17 @@ app.view(CALLBACK.pick, async ({ ack, body, view, client, logger }) => {
     return ack({ response_action: 'update', view: formFor(template, body.user.id, authorName, { origin, source }) });
   }
   await ack({ response_action: 'update', view: draftingView('your feedback') });
-  await draftIntoView({ client, logger, viewId: view.id, userId: body.user.id, feedback: feedback.trim(), template, origin, source });
+  await draftIntoView({
+    client,
+    logger,
+    viewId: view.id,
+    userId: body.user.id,
+    feedback: feedback.trim(),
+    template,
+    origin,
+    source,
+    what: 'your feedback',
+  });
 });
 
 app.view(CALLBACK.form, async ({ ack, body, view, client, logger }) => {

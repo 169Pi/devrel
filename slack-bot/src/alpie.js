@@ -164,14 +164,50 @@ export function keepKnownLinks(text, allowed) {
     });
 }
 
+/** Where Alpie is in a streamed reply: still reasoning, or writing the actual output. */
+export function progressOf(content) {
+  const end = content.indexOf('</think>');
+  return {
+    phase: end === -1 ? 'thinking' : 'writing',
+    chars: content.length,
+    output: end === -1 ? '' : content.slice(end + '</think>'.length).trimStart(),
+  };
+}
+
+/** Reads an OpenAI-style server-sent-events stream, calling onDelta with each content fragment. */
+async function readStream(body, onDelta) {
+  const decoder = new TextDecoder();
+  let buffer = '';
+  for await (const chunk of body) {
+    buffer += decoder.decode(chunk, { stream: true });
+    let newline;
+    while ((newline = buffer.indexOf('\n')) !== -1) {
+      const line = buffer.slice(0, newline).trim();
+      buffer = buffer.slice(newline + 1);
+      if (!line.startsWith('data:')) continue;
+      const data = line.slice(5).trim();
+      if (!data || data === '[DONE]') continue;
+      let delta;
+      try {
+        delta = JSON.parse(data).choices?.[0]?.delta?.content;
+      } catch {
+        continue;
+      }
+      if (delta) onDelta(delta);
+    }
+  }
+}
+
 export function createAlpie({ apiKey, baseUrl, model, timeoutMs, fetchImpl = globalThis.fetch }) {
-  async function complete(messages) {
+  /** With onProgress, streams the reply and reports progress as it arrives (for loading animations). */
+  async function complete(messages, { onProgress } = {}) {
+    const stream = Boolean(onProgress);
     let res;
     try {
       res = await fetchImpl(`${baseUrl.replace(/\/$/, '')}/chat/completions`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model, messages, max_tokens: 4096, stream: false }),
+        body: JSON.stringify({ model, messages, max_tokens: 4096, stream }),
         signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (err) {
@@ -181,7 +217,22 @@ export function createAlpie({ apiKey, baseUrl, model, timeoutMs, fetchImpl = glo
       const detail = await res.json().then((b) => b?.error?.message ?? b?.error, () => null);
       throw new AlpieError(`Alpie API error ${res.status}${detail ? `: ${detail}` : ''}`);
     }
-    const content = (await res.json())?.choices?.[0]?.message?.content;
+
+    let content = '';
+    if (stream && /event-stream/.test(res.headers.get('content-type') ?? '')) {
+      try {
+        await readStream(res.body, (delta) => {
+          content += delta;
+          onProgress(progressOf(content));
+        });
+      } catch (err) {
+        throw new AlpieError(err.name === 'TimeoutError' ? 'Alpie took too long to respond' : `Alpie's reply was cut off: ${err.message}`);
+      }
+    } else {
+      // Not streamed (or the server ignored stream: true): one JSON body.
+      content = (await res.json())?.choices?.[0]?.message?.content ?? '';
+      onProgress?.(progressOf(content));
+    }
     if (!content) throw new AlpieError('Alpie returned an empty reply');
     return content;
   }
@@ -191,27 +242,32 @@ export function createAlpie({ apiKey, baseUrl, model, timeoutMs, fetchImpl = glo
      * Drafts an issue from feedback. Pass one template to force it, or several
      * to let Alpie choose. Retries once if the reply isn't usable JSON.
      */
-    async draft({ templates, feedback, reporter }) {
+    async draft({ templates, feedback, reporter, onProgress }) {
       const messages = buildDraftMessages({ templates, feedback, reporter });
-      const reply = await complete(messages);
+      const reply = await complete(messages, { onProgress });
       try {
         return parseDraft(reply, templates, { feedback });
       } catch (err) {
         if (!(err instanceof AlpieError) || !/valid JSON/.test(err.message)) throw err;
-        const retry = await complete([
-          ...messages,
-          { role: 'assistant', content: reply },
-          { role: 'user', content: 'Reply with only the JSON object described above. No other text.' },
-        ]);
+        const retry = await complete(
+          [
+            ...messages,
+            { role: 'assistant', content: reply },
+            { role: 'user', content: 'Reply with only the JSON object described above. No other text.' },
+          ],
+          { onProgress },
+        );
         return parseDraft(retry, templates, { feedback });
       }
     },
 
     /** Answers a question in a Slack conversation, grounded in the templates and recent issues. */
-    async answer({ repo, conversation, templates, issues }) {
-      const reply = stripReasoning(await complete(buildAnswerMessages({ repo, conversation, templates, issues })));
-      if (!reply) throw new AlpieError('Alpie returned an empty answer');
+    async answer({ repo, conversation, templates, issues, onProgress }) {
       const allowed = [`https://github.com/${repo}`, ...issues.map((i) => i.url), ...(conversation.match(URL) ?? [])];
+      // Partial answers shown while streaming get the same link filtering as the final one.
+      const progress = onProgress && ((p) => onProgress({ ...p, output: keepKnownLinks(p.output, allowed) }));
+      const reply = stripReasoning(await complete(buildAnswerMessages({ repo, conversation, templates, issues }), { onProgress: progress }));
+      if (!reply) throw new AlpieError('Alpie returned an empty answer');
       return keepKnownLinks(reply, allowed).slice(0, 3500);
     },
   };

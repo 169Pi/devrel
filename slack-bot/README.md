@@ -40,6 +40,17 @@ Mention `@Alpieca` in a channel or thread, or DM it. If you mention it in a chan
 
 Whether a message is "something to raise" or "a question" is a quick keyword check (`looksLikeIssue` in `src/slack-text.js`). Either way the other option is one click away.
 
+### Loading animation
+
+While Alpie works, the draft form and the answer placeholder show a live loading animation, re-rendered every 1.5–2 seconds:
+
+```
+⠹ Alpie is thinking it through…
+━━━━━━🦙┄┄┄┄┄┄┄┄  6s
+```
+
+It's driven by Alpie's streamed output, not a timer. The stage changes from *Reading the conversation* to *Thinking it through* to *Writing*, and the 🦙 moves along the track as Alpie streams. For answers, the text appears as Alpie writes it, with the same link filtering as the final answer. If someone opens a draft that was started in the background, the animation picks up where that draft has got to. Animation frames are skipped, never queued, when Slack is slow, and they stop before the final result is shown, so a late frame can't overwrite it.
+
 ### Why drafting takes ~15 seconds
 
 Alpie is a reasoning model: it writes about 1,200 characters of reasoning before the ~400-character JSON draft, at roughly 30 tokens/second. Prompt size barely matters, and the API ignores the usual ways of turning reasoning off: pre-filled answers, `enable_thinking: false`, and instructions to be brief. So the bot hides the wait instead, by drafting in the background as soon as an issue-like mention or DM arrives. A faster Alpie mode would need to come from the Alpie API itself.
