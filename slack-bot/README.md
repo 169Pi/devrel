@@ -193,3 +193,7 @@ The tests parse the real templates in `../.github/ISSUE_TEMPLATE`. They cover:
 | `src/people.js` | Stored Slack-to-GitHub username links. |
 | `src/github.js` | GitHub API calls. |
 | `scripts/post-github-issue.js` | Run by the workflow to post GitHub-opened issues to Slack. |
+
+## License
+
+Copyright 2026 169Pi. Alpieca is licensed under the [Apache License 2.0](LICENSE): fork it, adapt it, and run it for your own team. The license applies to the code in this `slack-bot/` folder.

@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "description": "Alpieca: Slack bot that files GitHub issues in 169Pi/devrel using the repo's issue templates",
+  "license": "Apache-2.0",
   "type": "module",
   "main": "src/app.js",
   "engines": {
