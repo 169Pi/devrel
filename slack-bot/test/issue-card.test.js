@@ -60,9 +60,11 @@ test('open cards offer triage; closed cards offer reopen', () => {
   const ids = (issue) => issueCard(issue, { repo: 'r' }).blocks.find((b) => b.type === 'actions').elements.map((e) => e.action_id);
   assert.deepEqual(ids(ghIssue()), ['issue_view', ACTION.assign, ACTION.label, ACTION.comment, ACTION.close]);
   assert.deepEqual(ids(ghIssue({ state: 'closed', state_reason: 'completed' })), ['issue_view', ACTION.comment, ACTION.reopen]);
-  const open = issueCard(ghIssue(), { repo: 'r', note: 'Closed by <@U2>' });
-  assert.equal(open.blocks.find((b) => b.type === 'actions').elements.find((e) => e.action_id === ACTION.close).confirm.title.text, 'Close #42?');
-  assert.equal(open.blocks.at(-1).elements[0].text, 'Closed by <@U2>');
+  const open = issueCard(ghIssue(), { repo: 'r', note: 'Marked resolved by <@U2>' });
+  const resolve = open.blocks.find((b) => b.type === 'actions').elements.find((e) => e.action_id === ACTION.close);
+  assert.equal(resolve.text.text, '✅ Mark resolved');
+  assert.equal(resolve.confirm.title.text, 'Resolve #42?');
+  assert.equal(open.blocks.at(-1).elements[0].text, 'Marked resolved by <@U2>');
   assert.match(JSON.stringify(issueCard(ghIssue({ state: 'closed', state_reason: 'not_planned' }), { repo: 'r' })), /not planned/);
 });
 

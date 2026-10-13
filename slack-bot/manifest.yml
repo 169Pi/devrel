@@ -7,10 +7,11 @@ display_information:
   description: Slack ↔ GitHub, the woolly way. PRs trot in, issues trot out, and Alpie turns any thread into a template-ready issue.
   long_description: >-
     Alpieca is 169Pi's Slack-to-GitHub sidekick. It announces Good First Alpie pull requests in Slack when they're
-    ready for review, and lets anyone raise an issue in 169Pi/devrel without leaving Slack. Run /alpieca to fill
-    in one of the repo's issue templates, describe the problem in your own words, or use "Turn into GitHub issue" on
-    any message. Alpie reads the thread, drafts the template, and adds context for maintainers. You review the draft
-    before anything is filed, so every issue lands clean, labelled, and linked back to the conversation it came from.
+    ready for review, and lets anyone raise an issue or product feedback without leaving Slack. Run /alpieca to fill
+    in an issue template, describe the problem in your own words, or use "Turn into GitHub issue" on any message.
+    Alpie reads the thread and its screenshots, drafts the template, and adds context for maintainers. You review the
+    draft before anything is filed, so every issue lands clean, labelled, and linked back to the conversation
+    and screenshots it came from.
   background_color: "#000000"
 features:
   app_home:
@@ -22,18 +23,18 @@ features:
     always_online: true
   slash_commands:
     - command: /alpieca
-      description: Raise a GitHub issue from a 169Pi/devrel template
+      description: Raise a GitHub issue or product feedback from a template
       usage_hint: "[merch | showcase | help | or describe the issue]"
       should_escape: false
   shortcuts:
     - name: Raise a GitHub issue
       type: global
       callback_id: raise_github_issue
-      description: File an issue in 169Pi/devrel using its issue templates
+      description: File an issue or product feedback using the repos' issue templates
     - name: Turn into GitHub issue
       type: message
       callback_id: issue_from_message
-      description: Alpie drafts a 169Pi/devrel issue from this message and its thread
+      description: Alpie drafts an issue from this message, its thread and screenshots
 oauth_config:
   scopes:
     bot:
@@ -57,6 +58,8 @@ oauth_config:
       - groups:read
       - im:read
       - mpim:read
+      # Read screenshots in threads so Alpie can see them, and link files from feedback issues
+      - files:read
   pkce_enabled: false
 settings:
   event_subscriptions:

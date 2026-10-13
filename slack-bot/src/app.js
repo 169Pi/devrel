@@ -3,9 +3,10 @@ import { App } from '@slack/bolt';
 import { accessFor, isPublicChannel } from './access.js';
 import { AlpieError, createAlpie } from './alpie.js';
 import { loadConfig } from './config.js';
-import { createGitHub } from './github.js';
-import { ACTION, escapeSlack, issueCard } from './issue-card.js';
+import { ACTION, escapeSlack, issueCard, parseIssueRef } from './issue-card.js';
+import { downloadSlackFile, filesIn, imagesForAlpie, slackFile } from './media.js';
 import {
+  ATTACHMENTS_BLOCK,
   CALLBACK,
   commentView,
   formView,
@@ -18,26 +19,22 @@ import {
 } from './modal.js';
 import { createPeopleStore, GITHUB_LOGIN, normalizeLogin } from './people.js';
 import { createProgress, startTicker, statusLine } from './progress.js';
+import { createRepos } from './repos.js';
 import { looksLikeIssue, markdownToMrkdwn, threadTranscript } from './slack-text.js';
-import {
-  createTemplateStore,
-  findTemplate,
-  loadLocalTemplates,
-  renderIssue,
-  validateAnswers,
-} from './templates.js';
+import { findTemplate, renderIssue, validateAnswers } from './templates.js';
 
 const config = loadConfig();
-const repo = config.github.repo;
-const github = createGitHub(config.github);
+// The main repo, plus the product feedback repo if there is one. Picking a template picks the repo.
+const repos = createRepos(
+  [
+    { repo: config.github.repo, ref: config.github.ref, templateDir: config.templateDir },
+    // Feedback issues get the team @mention and link the files shared in Slack.
+    ...(config.feedback ? [{ ...config.feedback, linkFiles: true }] : []),
+  ],
+  { token: config.github.token, ttlMs: config.templateTtlMs },
+);
 const alpie = config.alpie ? createAlpie(config.alpie) : null;
 const people = await createPeopleStore(path.join(config.dataDir, 'people.json'));
-const templates = createTemplateStore(
-  config.templateDir ? () => loadLocalTemplates(config.templateDir) : () => github.loadTemplates(),
-  { ttlMs: config.templateTtlMs },
-);
-// Assume public until GitHub says otherwise, so reporters are always warned when in doubt.
-let publicRepo = true;
 
 const app = new App({
   token: config.slack.token,
@@ -67,6 +64,19 @@ const home = { teamId: null, enterpriseId: null };
 const access = async (client, userId) => accessFor(await userInfo(client, userId), home);
 const NOT_A_MEMBER = ':lock: Alpieca only works for members of this workspace.';
 
+/** Guests can't file into, or read about, private repos. */
+const isGuest = async (client, userId) => (await access(client, userId)).reason === 'guest';
+const templatesFor = async (client, userId) => repos.templates({ guest: await isGuest(client, userId) });
+const reposFor = async (client, userId) => ((await isGuest(client, userId)) ? repos.list.filter((r) => r.public) : repos.list);
+const repoNames = (all) => [...new Set(all.map((t) => t.repo))];
+const repoList = (names) => names.map((n) => `*${n}*`).join(' or ');
+
+/** Downloads a file someone shared in Slack, using the bot's token. */
+const downloadFile = (file, maxBytes) => downloadSlackFile(file, { token: config.slack.token, maxBytes });
+
+/** The Slack tag for a repo's team, e.g. "<!subteam^S123>" for a user group. */
+const slackTag = (id) => (!id ? '' : id.startsWith('S') ? `<!subteam^${id}>` : `<@${id}>`);
+
 // Links to public channels are fine in a public issue; private channels and DMs stay private.
 const channels = new Map();
 async function publicPermalink(client, channel, ts) {
@@ -77,18 +87,12 @@ async function publicPermalink(client, channel, ts) {
   return client.chat.getPermalink({ channel, message_ts: ts }).then((r) => r.permalink, () => undefined);
 }
 
-let labelCache = { at: 0, labels: [] };
-async function repoLabels() {
-  if (Date.now() - labelCache.at > 5 * 60_000) labelCache = { at: Date.now(), labels: await github.listLabels() };
-  return labelCache.labels;
-}
-
 /** Validates a GitHub username typed into Slack. Returns { login } or { error }. */
 async function checkGithubLogin(value) {
   const login = normalizeLogin(value);
   if (!GITHUB_LOGIN.test(login)) return { error: "That doesn't look like a GitHub username." };
   // If GitHub can't be reached, accept the name rather than block the reporter.
-  if (!(await github.userExists(login).catch(() => true))) return { error: `There's no GitHub user called @${login}.` };
+  if (!(await repos.main.github.userExists(login).catch(() => true))) return { error: `There's no GitHub user called @${login}.` };
   return { login };
 }
 
@@ -96,13 +100,22 @@ async function checkGithubLogin(value) {
 const draftingView = (what, progress = createProgress(), tick = 0) =>
   statusView(
     'Alpie is drafting…',
-    `${statusLine(progress, tick, 'draft')}\n\n_Turning ${what} into an issue draft. This usually takes 10–20 seconds._`,
+    `${statusLine(progress, tick, 'draft')}\n\n_Turning ${what} into an issue draft. This usually takes a few seconds._`,
   );
 
-const formFor = (template, userId, authorName, opts = {}) =>
-  formView(template, { authorName, githubLogin: people.githubFor(userId), publicRepo, ...opts });
+function formFor(template, userId, authorName, opts = {}) {
+  const dest = repos.get(template.repo);
+  return formView(template, {
+    authorName,
+    githubLogin: people.githubFor(userId),
+    publicRepo: dest.public,
+    linkFiles: Boolean(dest.linkFiles),
+    mention: dest.mention,
+    ...opts,
+  });
+}
 
-const pickerFor = (all, opts = {}) => pickerView(all, { repo, alpie: Boolean(alpie), ...opts });
+const pickerFor = (all, opts = {}) => pickerView(all, { repos: repoNames(all), alpie: Boolean(alpie), ...opts });
 
 /**
  * Has Alpie draft the issue, then swaps the open modal (viewId) for a pre-filled
@@ -110,9 +123,23 @@ const pickerFor = (all, opts = {}) => pickerView(all, { repo, alpie: Boolean(alp
  * the original feedback, if Alpie fails or no template fits.
  * `origin` ({ channel, thread }) is where the confirmation card gets posted.
  * `pending` is a draft already started in the background (see prefetchDraft).
+ * `files` are the conversation's attachments: images go to Alpie, and all are offered in the form.
  */
-async function draftIntoView({ client, logger, viewId, userId, feedback, template, source, origin, pending, progress, what = 'this' }) {
-  const [all, authorName] = await Promise.all([templates.all(), displayName(client, userId)]);
+async function draftIntoView({
+  client,
+  logger,
+  viewId,
+  userId,
+  feedback,
+  template,
+  source,
+  origin,
+  pending,
+  progress,
+  files = [],
+  what = 'this',
+}) {
+  const [all, authorName] = await Promise.all([templatesFor(client, userId), displayName(client, userId)]);
   // A background draft brings its own progress; otherwise track this one as it streams.
   const live = progress ?? createProgress();
   const stopAnimation = startTicker(
@@ -122,18 +149,22 @@ async function draftIntoView({ client, logger, viewId, userId, feedback, templat
   let view;
   try {
     const draft = await (pending ??
-      alpie.draft({
-        templates: template ? [template] : all,
-        feedback,
-        reporter: authorName,
-        onProgress: (p) => Object.assign(live, p),
-      })).finally(stopAnimation);
+      imagesForAlpie(files, downloadFile, logger).then((images) =>
+        alpie.draft({
+          templates: template ? [template] : all,
+          feedback,
+          reporter: authorName,
+          images,
+          onProgress: (p) => Object.assign(live, p),
+        }),
+      )).finally(stopAnimation);
     view = formFor(draft.template, userId, authorName, {
       initial: draft.answers,
       extraContext: draft.additionalContext,
       drafted: true,
       source,
       origin,
+      attachments: files,
       banner: `:sparkles: *Alpie drafted this ${draft.template.name} issue.* Check each field, fill in anything left blank, then create it.`,
     });
   } catch (err) {
@@ -145,6 +176,7 @@ async function draftIntoView({ client, logger, viewId, userId, feedback, templat
           extraContext: feedback,
           source,
           origin,
+          attachments: files,
           banner: `${warning} Fill in the form below. Your original text is in *Additional context*.`,
         })
       : pickerFor(all, { feedback, warning: `${warning} Pick a template and try again.`, metadata: { origin, source } });
@@ -153,7 +185,7 @@ async function draftIntoView({ client, logger, viewId, userId, feedback, templat
 }
 
 async function openIssueModal({ client, logger, triggerId, userId, query, origin }) {
-  const [all, authorName] = await Promise.all([templates.all(), displayName(client, userId)]);
+  const [all, authorName] = await Promise.all([templatesFor(client, userId), displayName(client, userId)]);
   const match = query ? findTemplate(all, query) : null;
   if (match) return client.views.open({ trigger_id: triggerId, view: formFor(match, userId, authorName, { origin }) });
   if (query && alpie) {
@@ -164,7 +196,7 @@ async function openIssueModal({ client, logger, triggerId, userId, query, origin
   await client.views.open({ trigger_id: triggerId, view: pickerFor(all, { metadata: { origin } }) });
 }
 
-/** Reads a message (and its thread, if any) as a transcript for Alpie, plus a permalink to it. */
+/** Reads a message (and its thread, if any) as a transcript for Alpie, plus a permalink and its files. */
 async function conversationFeedback(client, logger, { channel, ts, threadTs, message }) {
   const root = threadTs ?? (message?.reply_count ? ts : null);
   let messages = message ? [message] : [];
@@ -184,7 +216,7 @@ async function conversationFeedback(client, logger, { channel, ts, threadTs, mes
     threadTranscript(messages, { selectedTs: ts, resolveUser: (id) => displayName(client, id) }),
     publicPermalink(client, channel, ts),
   ]);
-  return { feedback, permalink };
+  return { feedback, permalink, files: filesIn(messages) };
 }
 
 /** Posts a card where the issue was raised; falls back to a DM if Alpieca can't post there. */
@@ -203,10 +235,11 @@ async function postCard(client, logger, { origin, userId, card }) {
 }
 
 function helpText(all) {
-  const list = all.map((t) => `• *${t.name}*: ${t.about || 'no description'}`).join('\n');
+  const names = repoNames(all);
+  const list = all.map((t) => `• *${t.name}*: ${t.about || 'no description'}${names.length > 1 ? ` _(${t.repo})_` : ''}`).join('\n');
   const cmd = config.slack.command;
   return [
-    `*${cmd}* opens a form for one of the issue templates in *${repo}*:`,
+    `*${cmd}* opens a form for one of the issue templates in ${repoList(names)}:`,
     list,
     `Jump straight to one with e.g. \`${cmd} ${all[0]?.name.split(' ')[0].toLowerCase() ?? ''}\`.`,
     alpie &&
@@ -224,7 +257,7 @@ app.command(config.slack.command, async ({ ack, command, client, respond, logger
   const ephemeral = (text) => respond({ response_type: 'ephemeral', text });
   try {
     if (!(await access(client, command.user_id)).member) return await ephemeral(NOT_A_MEMBER);
-    if (query === 'help') return await ephemeral(helpText(await templates.all()));
+    if (query === 'help') return await ephemeral(helpText(await templatesFor(client, command.user_id)));
     const linkMatch = query.match(/^github(?:\s+(\S+))?$/i);
     if (linkMatch) {
       if (!linkMatch[1]) {
@@ -281,7 +314,7 @@ app.shortcut('issue_from_message', async ({ ack, shortcut, client, logger }) => 
   try {
     const channel = shortcut.channel.id;
     const { message } = shortcut;
-    const { feedback, permalink } = await conversationFeedback(client, logger, {
+    const { feedback, permalink, files } = await conversationFeedback(client, logger, {
       channel,
       ts: message.ts,
       threadTs: message.thread_ts,
@@ -295,6 +328,7 @@ app.shortcut('issue_from_message', async ({ ack, shortcut, client, logger }) => 
       feedback,
       source: permalink,
       origin: { channel, thread: message.thread_ts ?? message.ts },
+      files,
       what: 'this conversation',
     });
   } catch (err) {
@@ -306,8 +340,8 @@ app.shortcut('issue_from_message', async ({ ack, shortcut, client, logger }) => 
 // ---------------------------------------------------------------------------
 // Conversations: "@Alpieca …" in channels and threads, and direct messages.
 
-// Alpie takes ~12-15s to draft, almost all of it reasoning. When a message looks like an issue,
-// start drafting straight away so the wait mostly happens before anyone clicks.
+// When a message looks like an issue, start drafting straight away so the wait (a few seconds,
+// plus downloading any screenshots) mostly happens before anyone clicks.
 const prefetched = new Map(); // "channel:ts" -> { prep, draft, progress, userId }
 const PREFETCH_TTL_MS = 15 * 60_000;
 
@@ -315,8 +349,11 @@ function prefetchDraft(client, logger, { channel, ts, threadTs, userId }) {
   const key = `${channel}:${ts}`;
   const progress = createProgress();
   const prep = conversationFeedback(client, logger, { channel, ts, threadTs });
-  const draft = Promise.all([prep, templates.all(), displayName(client, userId)]).then(([{ feedback }, all, reporter]) =>
-    alpie.draft({ templates: all, feedback, reporter, onProgress: (p) => Object.assign(progress, p) }),
+  const draft = Promise.all([prep, templatesFor(client, userId), displayName(client, userId)]).then(
+    async ([{ feedback, files }, all, reporter]) => {
+      const images = await imagesForAlpie(files, downloadFile, logger);
+      return alpie.draft({ templates: all, feedback, reporter, images, onProgress: (p) => Object.assign(progress, p) });
+    },
   );
   // Failures are reported when someone clicks; don't let an unclicked one crash the process.
   prep.catch(() => {});
@@ -368,14 +405,17 @@ async function handleConversation({ client, logger, event, text, isDm }) {
   const publicly = (payload) => client.chat.postMessage({ channel, thread_ts: isDm ? (thread ?? undefined) : (thread ?? ts), ...payload });
 
   // A bare "@Alpieca" in a thread means "turn this thread into an issue"; elsewhere it's a hello.
-  const wantsIssue = looksLikeIssue(text) || (!text && thread && !isDm);
+  // A screenshot or recording on its own is feedback too.
+  const wantsIssue = looksLikeIssue(text) || (!text && thread && !isDm) || Boolean(event.files?.length);
+  const all = await templatesFor(client, event.user);
+  const where = repoList(repoNames(all));
   if (/^(help|hi|hello|hey)?$/i.test(text) && !wantsIssue) {
-    return privately({ text: `:llama: Hi! Ask me about *${repo}* issues, or tell me about a bug or idea and I'll help you raise it.\n\n${helpText(await templates.all())}` });
+    return privately({ text: `:llama: Hi! Ask me about ${where} issues, or tell me about a bug, some feedback or an idea and I'll help you raise it.\n\n${helpText(all)}` });
   }
 
   if (wantsIssue) {
     if (alpie) prefetchDraft(client, logger, { channel, ts, threadTs: thread, userId: event.user });
-    const where = thread && !isDm ? 'this thread' : 'this';
+    const from = thread && !isDm ? 'this thread' : 'this';
     return privately({
       text: 'Want me to turn this into a GitHub issue?',
       blocks: [
@@ -384,8 +424,8 @@ async function handleConversation({ client, logger, event, text, isDm }) {
           text: {
             type: 'mrkdwn',
             text: alpie
-              ? `:llama: Sounds like something for *${repo}*. Alpie is already drafting an issue from ${where}; review it when you're ready, and I'll post the issue back here.`
-              : `:llama: Want to raise a *${repo}* issue from ${where}? I'll post it back here.`,
+              ? `:llama: Sounds like something to raise. Alpie is already drafting an issue from ${from}; review it when you're ready, and I'll post the issue back here.`
+              : `:llama: Want to raise an issue in ${where} from ${from}? I'll post it back here.`,
           },
         },
         draftButtons(value, { prefetching: Boolean(alpie) }),
@@ -395,9 +435,9 @@ async function handleConversation({ client, logger, event, text, isDm }) {
 
   if (!alpie) {
     return privately({
-      text: `I can't answer questions without Alpie, but I can help you raise a *${repo}* issue.`,
+      text: `I can't answer questions without Alpie, but I can help you raise an issue in ${where}.`,
       blocks: [
-        { type: 'section', text: { type: 'mrkdwn', text: `:llama: I can't answer questions without Alpie, but I can help you raise a *${repo}* issue.` } },
+        { type: 'section', text: { type: 'mrkdwn', text: `:llama: I can't answer questions without Alpie, but I can help you raise an issue in ${where}.` } },
         draftButtons(value, { prefetching: false }),
       ],
     });
@@ -414,13 +454,21 @@ async function handleConversation({ client, logger, event, text, isDm }) {
   const stopAnimation = startTicker((tick) => client.chat.update({ channel: placeholder.channel, ts: placeholder.ts, ...frame(tick) }));
   let answer;
   try {
-    const [{ feedback: conversation }, all, issues] = await Promise.all([
+    // Guests only hear about public repos.
+    const visible = await reposFor(client, event.user);
+    const [{ feedback: conversation }, issues] = await Promise.all([
       conversationFeedback(client, logger, { channel, ts, threadTs: thread }),
-      templates.all(),
-      github.recentIssues().catch(() => []),
+      Promise.all(visible.map((r) => r.github.recentIssues().catch(() => []))).then((lists) => lists.flat()),
     ]);
     progress.phase = 'thinking';
-    const reply = await alpie.answer({ repo, conversation, templates: all, issues, onProgress: (p) => Object.assign(progress, p) });
+    const reply = await alpie.answer({
+      repos: visible.map((r) => r.repo),
+      model: config.alpie.model,
+      conversation,
+      templates: all,
+      issues,
+      onProgress: (p) => Object.assign(progress, p),
+    });
     answer = markdownToMrkdwn(reply).slice(0, 2900);
   } catch (err) {
     logger.warn(`Alpie answer failed: ${err.message}`);
@@ -454,8 +502,9 @@ app.event('app_mention', async ({ event, client, logger, context }) => {
 });
 
 app.message(async ({ message, client, logger, context }) => {
-  // Only plain messages people send to Alpieca directly; mentions in channels arrive as app_mention.
-  if (message.channel_type !== 'im' || message.subtype || message.bot_id) return;
+  // Only messages people send to Alpieca directly (with or without files); mentions in channels
+  // arrive as app_mention.
+  if (message.channel_type !== 'im' || (message.subtype && message.subtype !== 'file_share') || message.bot_id) return;
   const text = (message.text ?? '').replaceAll(`<@${context.botUserId}>`, '').trim();
   await handleConversation({ client, logger, event: message, text, isDm: true });
 });
@@ -476,7 +525,7 @@ app.action('mention_draft', async ({ ack, body, action, client, respond, logger 
   // Remove the offer once used; keep answers, which other people in the thread may still read.
   if (action.block_id === 'issue_offer') respond({ delete_original: true }).catch(() => {});
   try {
-    const { feedback, permalink } = await (entry?.prep ?? conversationFeedback(client, logger, { channel, ts, threadTs: thread }));
+    const { feedback, permalink, files } = await (entry?.prep ?? conversationFeedback(client, logger, { channel, ts, threadTs: thread }));
     await draftIntoView({
       client,
       logger,
@@ -488,6 +537,7 @@ app.action('mention_draft', async ({ ack, body, action, client, respond, logger 
       // Reuse the background draft only for the person it was started for (it's written as them).
       pending: reuse ? entry.draft : undefined,
       progress: reuse ? entry.progress : undefined,
+      files,
       what: 'this conversation',
     });
   } catch (err) {
@@ -502,7 +552,7 @@ app.action('mention_pick', async ({ ack, body, action, client, respond }) => {
     return respond({ response_type: 'ephemeral', replace_original: false, text: NOT_A_MEMBER });
   }
   const ref = JSON.parse(action.value);
-  const all = await templates.all();
+  const all = await templatesFor(client, body.user.id);
   await client.views.open({ trigger_id: body.trigger_id, view: pickerFor(all, { metadata: { origin: originFor(ref) } }) });
   if (action.block_id === 'issue_offer') respond({ delete_original: true }).catch(() => {});
 });
@@ -510,7 +560,7 @@ app.action('mention_pick', async ({ ack, body, action, client, respond }) => {
 app.view(CALLBACK.pick, async ({ ack, body, view, client, logger }) => {
   const { origin, source } = JSON.parse(view.private_metadata || '{}');
   const { template: templateId, feedback = '' } = readAnswers(view);
-  const template = templateId ? await templates.get(templateId) : null;
+  const template = templateId ? await repos.template(templateId) : null;
   if (templateId && !template) {
     return ack({ response_action: 'errors', errors: { template: 'That template no longer exists. Pick another one.' } });
   }
@@ -537,13 +587,16 @@ app.view(CALLBACK.pick, async ({ ack, body, view, client, logger }) => {
 
 app.view(CALLBACK.form, async ({ ack, body, view, client, logger }) => {
   const { templateId, version, drafted, source, origin } = JSON.parse(view.private_metadata || '{}');
-  const template = await templates.get(templateId, version);
+  const template = await repos.template(templateId, version);
+  const dest = repos.get(template?.repo);
   const answers = readAnswers(view);
   const userId = body.user.id;
   const errors = template
     ? validateAnswers(template, answers)
     : { title: 'This issue template was removed from GitHub. Close the form and start again.' };
-  if (!(await access(client, userId)).member) errors.title = 'Alpieca only works for members of this workspace.';
+  const who = await access(client, userId);
+  if (!who.member) errors.title = 'Alpieca only works for members of this workspace.';
+  else if (who.reason === 'guest' && !dest.public) errors.title = `Guests can't file issues in ${dest.repo}.`;
 
   // Only hit GitHub to check the username when it differs from the one we already know.
   const typed = normalizeLogin(answers[GITHUB_LOGIN_BLOCK]);
@@ -558,14 +611,35 @@ app.view(CALLBACK.form, async ({ ack, body, view, client, logger }) => {
   // Ack within Slack's 3s window, then talk to GitHub and update the same modal.
   await ack({ response_action: 'update', view: statusView('Filing issue…', ':hourglass_flowing_sand: Creating your issue on GitHub…') });
 
-  const reporter = (await displayName(client, userId)) ?? body.user.name;
-  const issue = renderIssue(template, answers, { reporter, githubLogin, drafted, source });
   const update = (title, markdown) =>
     client.views.update({ view_id: view.id, view: statusView(title, markdown) }).catch((err) => logger.warn(err));
 
+  // Ticked files from the conversation are linked in the issue. They stay in Slack.
+  const fileIds = dest.linkFiles ? (answers[ATTACHMENTS_BLOCK] || []) : [];
+  const files = (
+    await Promise.all(
+      fileIds.map((id) =>
+        client.files.info({ file: id }).then(
+          (r) => slackFile(r.file),
+          (err) => logger.warn(`Couldn't look up Slack file ${id}: ${err.data?.error ?? err.message}`),
+        ),
+      ),
+    )
+  ).filter(Boolean);
+
+  const reporter = (await displayName(client, userId)) ?? body.user.name;
+  const issue = renderIssue(template, answers, {
+    reporter,
+    githubLogin,
+    drafted,
+    source,
+    files,
+    mention: dest.mention,
+  });
+
   let created;
   try {
-    created = await github.createIssue(issue);
+    created = await dest.github.createIssue(issue);
   } catch (err) {
     const reason = err.response?.data?.message ?? err.message;
     logger.error(`Couldn't create issue "${issue.title}": ${reason}`);
@@ -584,15 +658,20 @@ app.view(CALLBACK.form, async ({ ack, body, view, client, logger }) => {
   const note = created.missingLabels.length
     ? `:warning: GitHub didn't apply ${created.missingLabels.map((l) => `\`${l}\``).join(', ')}. A triager can add them with *Label*.`
     : undefined;
-  const headline = `:memo: <@${userId}> raised a *${escapeSlack(template.name)}* issue${drafted ? ' · drafted with Alpie :sparkles:' : ''}`;
-  const card = issueCard(created.issue, { repo, headline, note });
+  const extras = [
+    drafted && 'drafted with Alpie :sparkles:',
+    files.length && `:paperclip: ${files.length} file${files.length === 1 ? '' : 's'} linked`,
+    dest.slackMention && `cc ${slackTag(dest.slackMention)}`,
+  ].filter(Boolean);
+  const headline = `:memo: <@${userId}> raised a *${escapeSlack(template.name)}* issue${extras.map((e) => ` · ${e}`).join('')}`;
+  const card = issueCard(created.issue, { repo: dest.repo, headline, note });
 
   try {
     const posted = await postCard(client, logger, { origin, userId, card });
-    await update('Issue created', `:white_check_mark: Filed ${link} in *${repo}* and posted it in ${posted.where}.`);
+    await update('Issue created', `:white_check_mark: Filed ${link} in *${dest.repo}* and posted it in ${posted.where}.`);
   } catch (err) {
     logger.warn(`Couldn't post issue card: ${err.message}`);
-    await update('Issue created', `:white_check_mark: Filed ${link} in *${repo}*.`);
+    await update('Issue created', `:white_check_mark: Filed ${link} in *${dest.repo}*.`);
   }
   if (config.slack.notifyChannel && config.slack.notifyChannel !== origin?.channel) {
     await client.chat.postMessage({ channel: config.slack.notifyChannel, ...card }).catch((err) => logger.warn(err));
@@ -608,16 +687,18 @@ function cardRef(body) {
   return {
     channel: body.channel?.id ?? body.container?.channel_id,
     ts: body.message?.ts ?? body.container?.message_ts,
+    thread: body.message?.thread_ts,
     headline: first?.type === 'context' ? first.elements?.[0]?.text : undefined,
   };
 }
 
 /** Re-renders a card from GitHub's current state, with a note about what just happened. */
-async function refreshCard(client, logger, { number, channel, ts, headline }, note) {
+async function refreshCard(client, logger, { repo, number, channel, ts, headline }, note) {
   if (!channel || !ts) return;
-  const issue = await github.getIssue(number);
+  const dest = repos.get(repo);
+  const issue = await dest.github.getIssue(number);
   await client.chat
-    .update({ channel, ts, ...issueCard(issue, { repo, headline, note }) })
+    .update({ channel, ts, ...issueCard(issue, { repo: dest.repo, headline, note }) })
     .catch((err) => logger.warn(`Couldn't refresh card: ${err.data?.error ?? err.message}`));
 }
 
@@ -631,8 +712,11 @@ function triage(handler) {
       ? config.slack.triageUsers.includes(body.user.id)
       : (await access(args.client, body.user.id)).triager;
     if (!allowed) return ephemeral(':lock: Only issue triagers can do that. Use *View on GitHub* to follow along.');
+    const parsed = parseIssueRef(args.action.value);
+    if (!parsed) return ephemeral(":x: This card is from an older version of Alpieca. Use *View on GitHub* instead.");
+    const dest = repos.get(parsed.repo);
     try {
-      await handler({ ...args, ephemeral, number: Number(args.action.value), ref: cardRef(body) });
+      await handler({ ...args, ephemeral, dest, number: parsed.number, ref: { ...cardRef(body), repo: dest.repo } });
     } catch (err) {
       logger.error(err);
       await ephemeral(`:x: ${err.response?.data?.message ?? err.message}`);
@@ -644,8 +728,9 @@ function triage(handler) {
 app.action('issue_view', async ({ ack }) => ack());
 
 async function assignAndRefresh({ client, logger, userId, login, number, ref, ephemeral }) {
-  if (!(await github.assign(number, login))) {
-    return ephemeral(`:warning: GitHub didn't assign *@${login}*. Only people with access to *${repo}* can be assigned.`);
+  const dest = repos.get(ref.repo);
+  if (!(await dest.github.assign(number, login))) {
+    return ephemeral(`:warning: GitHub didn't assign *@${login}*. Only people with access to *${dest.repo}* can be assigned.`);
   }
   await refreshCard(client, logger, { number, ...ref }, `:raising_hand: Assigned to <https://github.com/${login}|@${login}> by <@${userId}>`);
 }
@@ -666,32 +751,38 @@ app.action(
 
 app.action(
   ACTION.comment,
-  triage(async ({ body, client, number, ref }) => {
-    const issue = await github.getIssue(number);
+  triage(async ({ body, client, dest, number, ref }) => {
+    const issue = await dest.github.getIssue(number);
     await client.views.open({ trigger_id: body.trigger_id, view: commentView(issue, { number, ...ref }) });
   }),
 );
 
 app.action(
   ACTION.label,
-  triage(async ({ body, client, number, ref }) => {
-    const [issue, labels] = await Promise.all([github.getIssue(number), repoLabels()]);
+  triage(async ({ body, client, dest, number, ref }) => {
+    const [issue, labels] = await Promise.all([dest.github.getIssue(number), repos.labels(dest.repo)]);
     await client.views.open({ trigger_id: body.trigger_id, view: labelView(issue, labels, { number, ...ref }) });
   }),
 );
 
 app.action(
   ACTION.close,
-  triage(async ({ body, client, logger, number, ref }) => {
-    await github.setState(number, 'closed');
-    await refreshCard(client, logger, { number, ...ref }, `:white_check_mark: Closed by <@${body.user.id}>`);
+  triage(async ({ body, client, logger, dest, number, ref }) => {
+    await dest.github.setState(number, 'closed');
+    await refreshCard(client, logger, { number, ...ref }, `:white_check_mark: Marked resolved by <@${body.user.id}>`);
+    // Cards in a thread also say so in the thread, so the reporter and everyone there hear about it.
+    if (ref.thread) {
+      await client.chat
+        .postMessage({ channel: ref.channel, thread_ts: ref.thread, text: `:white_check_mark: <@${body.user.id}> marked #${number} resolved.` })
+        .catch((err) => logger.warn(`Couldn't post in thread: ${err.data?.error ?? err.message}`));
+    }
   }),
 );
 
 app.action(
   ACTION.reopen,
-  triage(async ({ body, client, logger, number, ref }) => {
-    await github.setState(number, 'open');
+  triage(async ({ body, client, logger, dest, number, ref }) => {
+    await dest.github.setState(number, 'open');
     await refreshCard(client, logger, { number, ...ref }, `:leftwards_arrow_with_hook: Reopened by <@${body.user.id}>`);
   }),
 );
@@ -705,7 +796,7 @@ app.view(CALLBACK.comment, async ({ ack, body, view, client, logger }) => {
   const name = ((await displayName(client, userId)) ?? body.user.name).replace(/[<>@]/g, '');
   const login = people.githubFor(userId);
   try {
-    const comment = await github.comment(meta.number, `${text}\n\n<sub>— ${name}${login ? ` (@${login})` : ''} via Slack</sub>`);
+    const comment = await repos.get(meta.repo).github.comment(meta.number, `${text}\n\n<sub>— ${name}${login ? ` (@${login})` : ''} via Slack</sub>`);
     if (meta.channel && meta.ts) {
       const excerpt = escapeSlack(text.length > 300 ? `${text.slice(0, 300)}…` : text).replace(/^/gm, '>');
       await client.chat.postMessage({
@@ -727,7 +818,7 @@ app.view(CALLBACK.label, async ({ ack, body, view, client, logger }) => {
   const labels = readAnswers(view).labels || [];
   await ack();
   try {
-    await github.setLabels(meta.number, labels);
+    await repos.get(meta.repo).github.setLabels(meta.number, labels);
     await refreshCard(client, logger, meta, `:label: Labels updated by <@${body.user.id}>`);
   } catch (err) {
     logger.error(err);
@@ -755,10 +846,10 @@ app.error(async (err) => {
 
 const identity = await app.client.auth.test();
 Object.assign(home, { teamId: identity.team_id, enterpriseId: identity.enterprise_id ?? null });
-await templates.refresh();
-publicRepo = await github.isPublic().catch(() => true);
+await repos.start();
 await app.start();
 console.log(
-  `Alpieca running (${config.slack.socketMode ? 'Socket Mode' : `HTTP on :${config.slack.port}`}), filing into ${repo}` +
+  `Alpieca running (${config.slack.socketMode ? 'Socket Mode' : `HTTP on :${config.slack.port}`}), filing into ` +
+    repos.list.map((r) => `${r.repo}${r.public ? '' : ' (private)'}`).join(' and ') +
     (alpie ? `, drafting with ${config.alpie.model}${config.alpie.thinking ? ' (reasoning on)' : ''}` : ', Alpie drafting off (no ALPIE_BASE_URL or ALPIE_API_KEY)'),
 );

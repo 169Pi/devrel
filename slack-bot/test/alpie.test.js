@@ -112,7 +112,11 @@ test('Alpie Seed: no key means no Authorization header, and reasoning mode is of
   });
   assert.equal(calls[0].headers.Authorization, undefined);
   assert.deepEqual(calls[0].body.chat_template_kwargs, { enable_thinking: false });
-  assert.deepEqual(calls[0].body.response_format, { type: 'json_object' });
+  const format = calls[0].body.response_format;
+  assert.equal(format.type, 'json_schema');
+  assert.equal(format.json_schema.strict, true);
+  assert.deepEqual(format.json_schema.schema.properties.template_id.enum, [...templates.map((t) => t.id), null]);
+  assert.equal(format.json_schema.schema.properties.fields.additionalProperties, false);
   assert.equal(calls[0].body.temperature, 0.2);
 
   await createAlpie({ apiKey: 'k', baseUrl: 'https://x', model: 'm', thinking: true, timeoutMs: 1000, fetchImpl }).draft({

@@ -121,7 +121,8 @@ export function findTemplate(templates, query) {
   const norm = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, '');
   const q = norm(query);
   if (!q) return null;
-  const hits = templates.filter((t) => norm(t.id).includes(q) || norm(t.name).includes(q));
+  // Match on the file name, not the repo-qualified id, so "/alpieca feedback" isn't ambiguous.
+  const hits = templates.filter((t) => norm(t.file ?? t.id).includes(q) || norm(t.name).includes(q));
   return hits.length === 1 ? hits[0] : null;
 }
 
@@ -153,11 +154,21 @@ function stripPrefix(prefix, summary) {
   return p && summary.toLowerCase().startsWith(p) ? summary.slice(p.length).trimStart() : summary;
 }
 
+/** A bullet linking to a file in Slack. */
+function fileLine({ name, permalink, mimetype = '' }) {
+  const icon = mimetype.startsWith('image/') ? '🖼️' : mimetype.startsWith('video/') ? '▶️' : '📎';
+  const label = `${icon} ${name.replace(/[[\]]/g, '')}`;
+  return /^https:\/\/[\w.-]+\.slack\.com\//.test(permalink ?? '') ? `- [${label}](${permalink})` : `- ${label}`;
+}
+
 /**
  * Renders answers back into the template's own Markdown layout, so issues filed
  * from Slack look exactly like issues filed through GitHub's "New issue" page.
+ *
+ * @param files    files shared in Slack, linked from the issue: [{ name, permalink, mimetype }]
+ * @param mention  a GitHub @user or @org/team to notify, e.g. "@169Pi/engineering"
  */
-export function renderIssue(template, answers, { reporter, githubLogin, drafted = false, source } = {}) {
+export function renderIssue(template, answers, { reporter, githubLogin, drafted = false, source, files = [], mention } = {}) {
   const summary = stripPrefix(template.titlePrefix, (answers.title ?? '').trim());
   const parts = template.sections.map((section) => {
     const heading = `${'#'.repeat(section.level)} ${section.heading}`;
@@ -169,8 +180,12 @@ export function renderIssue(template, answers, { reporter, githubLogin, drafted 
     }
     return `${heading}\n${(answers[section.id] ?? '').trim() || NO_RESPONSE}`;
   });
+  if (files.length) {
+    parts.push(`### 📎 Screenshots and recordings\n_In Slack. Open them with your Slack account._\n${files.map(fileLine).join('\n')}`);
+  }
   const extra = (answers.extra_context ?? '').trim();
   if (extra) parts.push(`### ${drafted ? '🤖 ' : ''}Additional context\n${extra}`);
+  if (mention) parts.push(`cc ${mention}`);
   const who = reporter?.replace(/[<>@]/g, '').trim();
   const footer = [
     // @login notifies and subscribes the real reporter; the issue itself is opened by the bot's token.

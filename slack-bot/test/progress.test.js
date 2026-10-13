@@ -77,6 +77,35 @@ test('reasoning sent in its own field shows as thinking, then the output parses'
   assert.equal(seen.at(-1).output, content);
 });
 
+test('a draft stuck emitting whitespace is cut off and tried again', async () => {
+  const good = JSON.stringify({ title: 'Neon hoodie', template_id: 'm.md', fields: { s0: 'Hoodie' }, additional_context: '' });
+  const replies = [`{\n  "title": "Neon hoodie",\n${'\n'.repeat(500)}`, `{\n  "title": "Neon${' '.repeat(200)}`, good];
+  const bodies = [];
+  let calls = 0;
+  const fetchImpl = async (url, init) => {
+    bodies.push(JSON.parse(init.body));
+    return streamingFetch(replies[calls++])(url, init);
+  };
+  const alpie = createAlpie({ baseUrl: 'https://x', model: 'm', timeoutMs: 5000, fetchImpl });
+  const template = { id: 'm.md', titlePrefix: '', sections: [{ id: 's0', fields: [] }] };
+  // No onProgress: schema drafts stream anyway, so a stuck one can be spotted.
+  const draft = await alpie.draft({ templates: [template], feedback: 'hoodie' });
+  assert.equal(draft.answers.s0, 'Hoodie');
+  assert.equal(calls, 3);
+  assert.ok(bodies.every((b) => b.stream === true));
+  assert.deepEqual(bodies[2].messages, bodies[0].messages, 'retried as-is, without the stuck reply');
+
+  // Three stuck replies in a row give up with a clear error.
+  let stuckCalls = 0;
+  const alwaysStuck = async (url, init) => {
+    stuckCalls++;
+    return streamingFetch(`{"title": "x",${'\t'.repeat(100)}`)(url, init);
+  };
+  const stuck = createAlpie({ baseUrl: 'https://x', model: 'm', timeoutMs: 5000, fetchImpl: alwaysStuck });
+  await assert.rejects(stuck.draft({ templates: [template], feedback: 'hoodie' }), /got stuck/);
+  assert.equal(stuckCalls, 3);
+});
+
 test('drafts stream with progress updates and still parse', async () => {
   const content = `Reasoning about the hoodie at length…\n</think>\n\n${JSON.stringify({
     template_id: 'm.md',
