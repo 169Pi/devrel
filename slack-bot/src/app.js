@@ -274,7 +274,7 @@ app.shortcut('issue_from_message', async ({ ack, shortcut, client, logger }) => 
   if (!alpie) {
     return client.views.open({
       trigger_id: shortcut.trigger_id,
-      view: statusView('Alpie not set up', 'Turning messages into issues needs Alpie. Ask whoever runs the bot to set `ALPIE_API_KEY`.'),
+      view: statusView('Alpie not set up', 'Turning messages into issues needs Alpie. Ask whoever runs the bot to set `ALPIE_BASE_URL` or `ALPIE_API_KEY`.'),
     });
   }
   const { view } = await client.views.open({ trigger_id: shortcut.trigger_id, view: draftingView('this conversation') });
@@ -760,5 +760,5 @@ publicRepo = await github.isPublic().catch(() => true);
 await app.start();
 console.log(
   `Alpieca running (${config.slack.socketMode ? 'Socket Mode' : `HTTP on :${config.slack.port}`}), filing into ${repo}` +
-    (alpie ? `, drafting with ${config.alpie.model}` : ', Alpie drafting off (no ALPIE_API_KEY)'),
+    (alpie ? `, drafting with ${config.alpie.model}${config.alpie.thinking ? ' (reasoning on)' : ''}` : ', Alpie drafting off (no ALPIE_BASE_URL or ALPIE_API_KEY)'),
 );

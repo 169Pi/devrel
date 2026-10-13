@@ -28,15 +28,19 @@ export function loadConfig(env = process.env) {
       repo,
       ref: env.GITHUB_TEMPLATE_REF || undefined,
     },
-    // Optional: without a key the bot works as plain forms, no drafting.
-    alpie: env.ALPIE_API_KEY
-      ? {
-          apiKey: env.ALPIE_API_KEY,
-          baseUrl: env.ALPIE_BASE_URL || 'https://api.169pi.com/v1',
-          model: env.ALPIE_MODEL || 'alpie-32b',
-          timeoutMs: (Number(env.ALPIE_TIMEOUT_SECONDS) || 90) * 1000,
-        }
-      : null,
+    // Optional: without a key or base URL the bot works as plain forms, no drafting.
+    // The hosted Alpie Seed endpoint needs no key, so setting ALPIE_BASE_URL alone turns it on.
+    alpie:
+      env.ALPIE_API_KEY || env.ALPIE_BASE_URL
+        ? {
+            apiKey: env.ALPIE_API_KEY || null,
+            baseUrl: env.ALPIE_BASE_URL || 'https://test.169pi.ai/v1',
+            model: env.ALPIE_MODEL || 'alpie_9b',
+            // Reasoning mode is slower and adds little to filling in a template, so it's off by default.
+            thinking: /^(1|true|yes|on)$/i.test(env.ALPIE_THINKING ?? ''),
+            timeoutMs: (Number(env.ALPIE_TIMEOUT_SECONDS) || 60) * 1000,
+          }
+        : null,
     // Where Alpieca remembers Slack -> GitHub usernames.
     dataDir: env.DATA_DIR || path.join(os.homedir(), '.alpieca'),
     // Read templates from disk instead of GitHub (local development / tests).
