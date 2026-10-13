@@ -55,7 +55,7 @@ The feedback template sits next to the main repo's templates in Slack. Picking a
 
 What's different about feedback issues:
 
-- **A template built for triage, mostly clicks.** The *Product Feedback* template asks what engineering needs: product checkboxes (iOS App, Android App, API, Playground, Alpie Chat; tick any), the area, dropdowns for type, who's affected, how often and severity, then what happened, what was expected, steps and environment. Required answers must be filled in before filing. Edit [`feedback-templates/product-feedback.md`](feedback-templates/product-feedback.md) on `main` and the form updates within minutes, no redeploy. Turn a field into a dropdown by listing its options: `* **Area (Login, Chat, Settings):**`. Add a product by adding a `- [ ] Name` line.
+- **A template built for triage, mostly clicks.** The *Product Feedback* template asks what engineering needs: product checkboxes (iOS App, Android App, API, Playground, Alpie Chat; tick any), the area, a radio choice of type, what happened, what was expected, steps, who's affected (checkboxes), radio choices of how often and severity, and environment. Required answers must be filled in before filing. Edit [`feedback-templates/product-feedback.md`](feedback-templates/product-feedback.md) on `main` and the form updates within minutes, no redeploy. Turn a field into radio buttons by listing its options: `* **Area (Login, Chat, Settings):**`. Add a product by adding a `- [ ] Name` line.
 - **A complete first draft.** From a line like *"the login screen of the app freezes"*, Alpie fills in the area, type and severity, describes what happened, and suggests the expected behaviour and steps to reproduce, for the reporter to check. It doesn't guess facts only the reporter knows: who's affected, how often, and the app version stay blank unless they said them. Products are ticked only if the reporter names them or a screenshot shows them, so "the app" alone leaves them for the reporter.
 - **Screenshots.** Alpie looks at up to four images from the thread and uses what they show: the product, the screen, and exact error messages.
 - **Files stay in Slack.** The form lists the thread's files, all ticked. Ticked files are linked from the issue, and only people in the Slack workspace can open them. Nothing is copied to GitHub. Files in a private channel or DM can only be opened by people in it.
@@ -99,7 +99,7 @@ Alpieca works with GitHub's Markdown issue templates as they are. No extra confi
 | `title: "[Project]: <…>"` | A **Title** field. The issue is titled `[Project]: <what you typed>`. |
 | `### Heading` followed by `*italic guidance*` | A multi-line box, with the guidance shown as a hint. |
 | `* **Field:**` bullets under a heading | One single-line input per bullet. |
-| `* **Field (A, B, C):**` | A dropdown with options A, B and C. The issue still reads `Field (A, B, C): B`. |
+| `* **Field (A, B, C):**` | Radio buttons for A, B and C (a dropdown if there are more than five). The issue still reads `Field (A, B, C): B`. |
 | A heading followed only by `- [ ] A`, `- [ ] B` task items | Checkboxes: tick any number. The issue shows them as a GitHub task list with the picks ticked. |
 | `(Optional)` or `(if applicable)` in a heading or bullet | An optional input. Everything else is required. |
 | A bullet named like *Repo*, *Link*, *Demo*, *Docs* or *URL* | Must contain an `https://` link. |

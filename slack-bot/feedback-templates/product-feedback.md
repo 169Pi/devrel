@@ -32,9 +32,15 @@ assignees: ''
 *1. Go to … 2. Click … 3. See …*
 
 
+### 👥 Who is affected?
+*Tick everyone who's run into it.*
+- [ ] Just me
+- [ ] Teammates
+- [ ] Customers
+- [ ] Everyone
+
 ### 📈 Impact
 *Helps engineering decide what to look at first.*
-* **Who is affected (Just me, Teammates, Customers, Everyone):** 
 * **How often (Every time, Sometimes, Once):** 
 * **Severity (Blocker, Major, Minor, Cosmetic):** 
 

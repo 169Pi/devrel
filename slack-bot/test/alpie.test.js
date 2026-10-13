@@ -76,6 +76,11 @@ test('a stray bracket copied from the template title is dropped', () => {
   assert.equal(draft.answers.title, 'Alpie Pager');
   const kept = parseDraft(reply({ ...GOOD, title: 'Support [beta] flags' }), templates, { feedback: FEEDBACK });
   assert.equal(kept.answers.title, 'Support [beta] flags');
+  const title = (t) => parseDraft(reply({ ...GOOD, title: t }), templates, { feedback: FEEDBACK }).answers.title;
+  // Seen live: the title repeated after a stray bracket.
+  assert.equal(title('Alpie is struggling to produce doc.x ] Alpie is struggling to produce doc.x'), 'Alpie is struggling to produce doc.x');
+  assert.equal(title('Export failed ] Error 413'), 'Export failed — Error 413');
+  assert.equal(title('] Alpie Pager'), 'Alpie Pager');
 });
 
 test('no matching template is an AlpieError (falls back to the picker)', () => {
