@@ -1,11 +1,12 @@
-// Loading animations for the ~15s Alpie takes. Slack can't animate text on its own, so the bot
+// Loading animations for the few seconds Alpie takes. Slack can't animate text on its own, so the bot
 // re-renders the message or modal every couple of seconds from Alpie's streamed progress.
 
 const SPINNER = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const TRACK = 14;
 
-// A typical Alpie reply: ~1,200 characters of reasoning, then the output (~400 for a draft).
-const EXPECTED_CHARS = { draft: 1700, answer: 1900 };
+// A typical Alpie Seed reply with reasoning off: ~450 characters for a draft, ~400 for an answer.
+// With reasoning on (ALPIE_THINKING) the llama reaches the end early and waits there.
+const EXPECTED_CHARS = { draft: 500, answer: 450 };
 
 export const STAGES = {
   reading: 'Reading the conversation',

@@ -102,6 +102,8 @@ export function parseDraft(content, templates, { feedback }) {
   let title = oneLine(str(raw.title));
   const prefix = template.titlePrefix.trim().toLowerCase();
   if (prefix && title.toLowerCase().startsWith(prefix)) title = title.slice(prefix.length).trim();
+  // A bracket left over from copying a "[PREFIX]: …" template title.
+  if (!title.includes('[')) title = title.replace(/\s*\]+$/, '');
   const answers = { title: clip(title, 256 - template.titlePrefix.length) };
 
   for (const section of template.sections) {
@@ -164,9 +166,13 @@ export function keepKnownLinks(text, allowed) {
     });
 }
 
-/** Where Alpie is in a streamed reply: still reasoning, or writing the actual output. */
-export function progressOf(content) {
+/**
+ * Where Alpie is in a streamed reply: still reasoning, or writing the actual output.
+ * With reasoning off, everything before a "</think>" (if one ever comes) is output.
+ */
+export function progressOf(content, { thinking = true } = {}) {
   const end = content.indexOf('</think>');
+  if (end === -1 && !thinking) return { phase: 'writing', chars: content.length, output: content.trimStart() };
   return {
     phase: end === -1 ? 'thinking' : 'writing',
     chars: content.length,
@@ -174,7 +180,10 @@ export function progressOf(content) {
   };
 }
 
-/** Reads an OpenAI-style server-sent-events stream, calling onDelta with each content fragment. */
+/**
+ * Reads an OpenAI-style server-sent-events stream, calling onDelta(content, reasoning) with each
+ * fragment. Servers that split reasoning out (vLLM) send it as `reasoning` or `reasoning_content`.
+ */
 async function readStream(body, onDelta) {
   const decoder = new TextDecoder();
   let buffer = '';
@@ -189,25 +198,37 @@ async function readStream(body, onDelta) {
       if (!data || data === '[DONE]') continue;
       let delta;
       try {
-        delta = JSON.parse(data).choices?.[0]?.delta?.content;
+        delta = JSON.parse(data).choices?.[0]?.delta;
       } catch {
         continue;
       }
-      if (delta) onDelta(delta);
+      const reasoning = delta?.reasoning ?? delta?.reasoning_content;
+      if (delta?.content || reasoning) onDelta(delta.content ?? '', reasoning ?? '');
     }
   }
 }
 
-export function createAlpie({ apiKey, baseUrl, model, timeoutMs, fetchImpl = globalThis.fetch }) {
+export function createAlpie({ apiKey, baseUrl, model, thinking = false, timeoutMs, fetchImpl = globalThis.fetch }) {
   /** With onProgress, streams the reply and reports progress as it arrives (for loading animations). */
-  async function complete(messages, { onProgress } = {}) {
+  async function complete(messages, { onProgress, json = false } = {}) {
     const stream = Boolean(onProgress);
     let res;
     try {
       res = await fetchImpl(`${baseUrl.replace(/\/$/, '')}/chat/completions`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model, messages, max_tokens: 4096, stream }),
+        headers: { ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}), 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model,
+          messages,
+          max_tokens: 4096,
+          stream,
+          // Low temperatures keep Alpie Seed factual; at its default it embellishes answers. Drafts
+          // also need JSON mode, or about half come back as broken JSON (raw newlines, dropped quotes).
+          temperature: json ? 0.2 : 0.3,
+          ...(json ? { response_format: { type: 'json_object' } } : {}),
+          // Alpie Seed's switch for reasoning mode; servers that don't know it ignore it.
+          chat_template_kwargs: { enable_thinking: thinking },
+        }),
         signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (err) {
@@ -220,10 +241,16 @@ export function createAlpie({ apiKey, baseUrl, model, timeoutMs, fetchImpl = glo
 
     let content = '';
     if (stream && /event-stream/.test(res.headers.get('content-type') ?? '')) {
+      // Reasoning sent in its own field is folded back in front of a "</think>", the shape the
+      // rest of the client already understands.
+      let reasoning = '';
+      let output = '';
       try {
-        await readStream(res.body, (delta) => {
-          content += delta;
-          onProgress(progressOf(content));
+        await readStream(res.body, (contentDelta, reasoningDelta) => {
+          reasoning += reasoningDelta;
+          output += contentDelta;
+          content = reasoning ? `${reasoning}${output ? `</think>${output}` : ''}` : output;
+          onProgress(progressOf(content, { thinking }));
         });
       } catch (err) {
         throw new AlpieError(err.name === 'TimeoutError' ? 'Alpie took too long to respond' : `Alpie's reply was cut off: ${err.message}`);
@@ -231,7 +258,7 @@ export function createAlpie({ apiKey, baseUrl, model, timeoutMs, fetchImpl = glo
     } else {
       // Not streamed (or the server ignored stream: true): one JSON body.
       content = (await res.json())?.choices?.[0]?.message?.content ?? '';
-      onProgress?.(progressOf(content));
+      onProgress?.(progressOf(content, { thinking }));
     }
     if (!content) throw new AlpieError('Alpie returned an empty reply');
     return content;
@@ -244,7 +271,7 @@ export function createAlpie({ apiKey, baseUrl, model, timeoutMs, fetchImpl = glo
      */
     async draft({ templates, feedback, reporter, onProgress }) {
       const messages = buildDraftMessages({ templates, feedback, reporter });
-      const reply = await complete(messages, { onProgress });
+      const reply = await complete(messages, { onProgress, json: true });
       try {
         return parseDraft(reply, templates, { feedback });
       } catch (err) {
@@ -255,7 +282,7 @@ export function createAlpie({ apiKey, baseUrl, model, timeoutMs, fetchImpl = glo
             { role: 'assistant', content: reply },
             { role: 'user', content: 'Reply with only the JSON object described above. No other text.' },
           ],
-          { onProgress },
+          { onProgress, json: true },
         );
         return parseDraft(retry, templates, { feedback });
       }
