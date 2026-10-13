@@ -19,6 +19,8 @@ const BASE_ENV = { SLACK_BOT_TOKEN: 'x', SLACK_APP_TOKEN: 'x', GITHUB_TOKEN: 'x'
 const feedbackTemplate = qualify(await loadLocalTemplates(FEEDBACK_TEMPLATES, silent), '169Pi/feedback')[0];
 /** The feedback template's bullet field ids by label, e.g. ids.Severity. */
 const ids = Object.fromEntries(feedbackTemplate.sections.flatMap((s) => s.fields.map((f) => [f.label, f.id])));
+/** The "Who is affected?" checkbox section's id. */
+const WHO = feedbackTemplate.sections.find((s) => s.title === '👥 Who is affected?').id;
 
 /** A fake GitHub client per repo; `private` repos report themselves as such. */
 function fakeGitHub({ priv = [] } = {}) {
@@ -165,11 +167,12 @@ test('the feedback template asks the triage questions', () => {
   assert.equal(products.title, '📱 Which products?');
   assert.deepEqual(products.choices, ['iOS App', 'Android App', 'API', 'Playground', 'Alpie Chat']);
   assert.equal(products.optional, false);
+  const who = feedbackTemplate.sections.find((s) => s.title === '👥 Who is affected?');
+  assert.deepEqual(who.choices, ['Just me', 'Teammates', 'Customers', 'Everyone']);
   const fields = feedbackTemplate.sections.flatMap((s) => s.fields.map((f) => [f.label, f.optional, f.options]));
   assert.deepEqual(fields, [
     ['Area or screen', false, null],
     ['Type', false, ['Bug', 'UX problem', 'Feature request', 'Praise']],
-    ['Who is affected', false, ['Just me', 'Teammates', 'Customers', 'Everyone']],
     ['How often', false, ['Every time', 'Sometimes', 'Once']],
     ['Severity', false, ['Blocker', 'Major', 'Minor', 'Cosmetic']],
     ['App version or device', true, null],
@@ -281,7 +284,7 @@ test('the draft schema pins checkboxes and dropdowns to their options, and needs
 test("Alpie gets the options, and is told not to guess who's affected or how often", () => {
   const [system, user] = buildDraftMessages({ templates: [feedbackTemplate], feedback: 'x' });
   const fields = Object.values(JSON.parse(user.content.match(/\[[\s\S]*\]/)[0])[0].fields);
-  assert.deepEqual(fields.filter((f) => f.only_if_stated).map((f) => f.label), ['Who is affected', 'How often', 'App version or device']);
+  assert.deepEqual(fields.filter((f) => f.only_if_stated).map((f) => f.label), ['👥 Who is affected?', 'How often', 'App version or device']);
   assert.deepEqual(fields.find((f) => f.label === 'Severity').options, ['Blocker', 'Major', 'Minor', 'Cosmetic']);
   assert.equal(fields.find((f) => f.label === 'Severity').single_line, undefined);
   assert.equal(fields.find((f) => f.label === 'Area or screen').single_line, true);
@@ -298,22 +301,23 @@ test("Alpie gets the options, and is told not to guess who's affected or how oft
 test("dropdown answers snap to an option, and who's affected / how often need the reporter's words", () => {
   const reply = (fields) => JSON.stringify({ title: 'Login freezes', template_id: feedbackTemplate.id, fields, additional_context: '' });
   const guessed = parseDraft(
-    reply({ [ids.Severity]: 'blocker', [ids.Type]: 'nonsense', [ids['How often']]: 'Sometimes', [ids['Who is affected']]: 'Customers', [ids['Area or screen']]: 'Login screen' }),
+    reply({ [ids.Severity]: 'blocker', [ids.Type]: 'nonsense', [ids['How often']]: 'Sometimes', [WHO]: 'Customers, Everyone', [ids['Area or screen']]: 'Login screen' }),
     [feedbackTemplate],
-    { feedback: 'login screen of the app freezes' },
+    // Screenshots can show products, but never who's affected.
+    { feedback: 'login screen of the app freezes', hasImages: true },
   );
   assert.equal(guessed.answers[ids.Severity], 'Blocker', 'judged by Alpie, snapped to the option');
   assert.equal(guessed.answers[ids.Type], '', 'not an option');
   assert.equal(guessed.answers[ids['How often']], '', 'not said');
-  assert.equal(guessed.answers[ids['Who is affected']], '', 'not said');
+  assert.deepEqual(guessed.answers[WHO], [], 'not said, screenshot or not');
   assert.equal(guessed.answers[ids['Area or screen']], 'Login screen', 'text fields untouched');
   assert.equal(parseDraft(reply({ [ids.Type]: 'UX' }), [feedbackTemplate], { feedback: 'x' }).answers[ids.Type], 'UX problem', 'prefix of an option');
 
-  const said = parseDraft(reply({ [ids['How often']]: 'Every time', [ids['Who is affected']]: 'Customers' }), [feedbackTemplate], {
-    feedback: 'a customer reported it, and it happens every time',
+  const said = parseDraft(reply({ [ids['How often']]: 'Every time', [WHO]: 'Customers, Just me, Teammates' }), [feedbackTemplate], {
+    feedback: 'a customer reported it and it happens to me too, every time',
   });
   assert.equal(said.answers[ids['How often']], 'Every time');
-  assert.equal(said.answers[ids['Who is affected']], 'Customers', '"a customer" counts for "Customers"');
+  assert.deepEqual(said.answers[WHO], ['Customers', 'Just me'], '"a customer" counts for Customers, "me" for Just me; teammates not said');
 });
 
 test('product ticks come from screenshots or named products, never from "the app"', () => {
@@ -373,17 +377,22 @@ test('an answer slipped into the field above (Product = Area) is cleared', () =>
   assert.equal(parseDraft(reply('Alpie'), [t], { feedback: 'x' }).answers.s0f0, 'Alpie');
 });
 
-test('option fields become dropdowns, with Alpie\'s pick selected', () => {
+test('option fields become radio buttons (or a dropdown if long), with Alpie\'s pick selected', () => {
   const view = formView(feedbackTemplate, { initial: { [ids.Severity]: 'Blocker', [ids.Type]: 'nonsense' } });
   const block = (id) => view.blocks.find((b) => b.block_id === id);
   const severity = block(ids.Severity).element;
-  assert.equal(severity.type, 'static_select');
+  assert.equal(severity.type, 'radio_buttons');
+  assert.equal(severity.placeholder, undefined, 'radio buttons take no placeholder');
+  assert.equal(block(ids.Type).element.type, 'radio_buttons');
+  assert.equal(block(ids['How often']).element.type, 'radio_buttons');
+  const long = qualify([parseTemplate('x.md', '---\nname: X\n---\n### Q\n* **Area (A, B, C, D, E, F):** \n')], 'a/b')[0];
+  assert.equal(formView(long).blocks.find((b) => b.block_id === 's0f0').element.type, 'static_select', 'six options: a dropdown');
   assert.deepEqual(severity.options.map((o) => o.value), ['Blocker', 'Major', 'Minor', 'Cosmetic']);
   assert.equal(severity.initial_option.value, 'Blocker');
   assert.equal(block(ids.Type).element.initial_option, undefined, 'unknown values leave it unselected');
   assert.equal(block(ids['Area or screen']).element.type, 'plain_text_input');
   // Dropdown answers come back like any other answer, and render into the template's layout.
-  const answers = readAnswers({ state: { values: { [ids.Severity]: { value: { type: 'static_select', selected_option: { value: 'Major' } } } } } });
+  const answers = readAnswers({ state: { values: { [ids.Severity]: { value: { type: 'radio_buttons', selected_option: { value: 'Major' } } } } } });
   assert.equal(answers[ids.Severity], 'Major');
   assert.match(renderIssue(feedbackTemplate, { title: 'x', ...answers }).body, /\* \*\*Severity \(Blocker, Major, Minor, Cosmetic\):\*\* Major/);
 });

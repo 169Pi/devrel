@@ -35,11 +35,16 @@ function input(blockId, label, element, { optional = false, hint } = {}) {
 
 const notice = (markdown) => ({ type: 'context', elements: [{ type: 'mrkdwn', text: markdown }] });
 
-/** A dropdown of a field's options, with `selected` picked if it's one of them. */
+// Up to this many options show as radio buttons (one click, all visible); more get a dropdown.
+const MAX_RADIO = 5;
+
+/** Radio buttons or a dropdown for a field's options, with `selected` picked if it's one of them. */
 function selectFor(options, selected) {
   const choices = options.map((o) => ({ text: text(truncate(o, OPTION_TEXT_MAX)), value: o.slice(0, 150) }));
   const initial = choices.find((c) => c.value.toLowerCase() === String(selected ?? '').trim().toLowerCase());
-  return { type: 'static_select', placeholder: text('Choose one'), options: choices, ...(initial ? { initial_option: initial } : {}) };
+  const picked = initial ? { initial_option: initial } : {};
+  if (choices.length <= MAX_RADIO) return { type: 'radio_buttons', options: choices, ...picked };
+  return { type: 'static_select', placeholder: text('Choose one'), options: choices, ...picked };
 }
 
 const repoLink = (repo) => `*<https://github.com/${repo}|${repo}>*`;

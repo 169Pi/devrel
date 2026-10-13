@@ -15,6 +15,8 @@ const RUNAWAY_RETRIES = 2;
 // Facts only the reporter knows. Alpie guesses them ("Sometimes", "Customers") otherwise, so
 // they're kept only if the reporter said them.
 const STATED_ONLY = /\b(how often|frequency|who is affected|affected|version|build)\b/i;
+// Words that don't identify a checkbox option on their own: "Just me" is named by "me".
+const FILLER = new Set(['app', 'just']);
 const EMAIL = /[\w.+-]+@[\w-]+(\.[\w-]+)+/g;
 // Things a screenshot can show (an iPhone status bar, a browser window), but that can't be guessed
 // from words alone: Alpie answered "All platforms" for every text-only report.
@@ -43,6 +45,7 @@ function schemaFor(template) {
               guidance: section.guidance || undefined,
               required: !section.optional,
               ...(section.choices ? { options: section.choices, pick_any_number: true } : {}),
+              only_if_stated: STATED_ONLY.test(section.title) || undefined,
             },
           ],
         ];
@@ -236,19 +239,25 @@ export function parseDraft(content, templates, { feedback, hasImages = false }) 
   let title = scrub(oneLine(str(raw.title)));
   const prefix = template.titlePrefix.trim().toLowerCase();
   if (prefix && title.toLowerCase().startsWith(prefix)) title = title.slice(prefix.length).trim();
-  // A bracket left over from copying a "[PREFIX]: …" template title.
-  if (!title.includes('[')) title = title.replace(/\s*\]+$/, '');
+  // Brackets left over from copying a "[PREFIX]: …" template title, sometimes with the title
+  // repeated after them: "Doc not showing ] Doc not showing" -> "Doc not showing".
+  if (!title.includes('[')) {
+    const parts = title.split(/\s*\]+\s*/).filter(Boolean);
+    title = parts.filter((p, i) => parts.findIndex((q) => q.toLowerCase() === p.toLowerCase()) === i).join(' — ');
+  }
   const answers = { title: clip(title, 256 - template.titlePrefix.length) };
 
   for (const section of template.sections) {
     if (section.choices) {
-      // Ticks are things a screenshot shows or the reporter names ("iOS App" needs "iOS"; "app"
-      // alone says nothing), so without screenshots each tick needs the reporter's words.
+      // Ticks need the reporter's words ("iOS App" needs "iOS"; "app" alone says nothing). Products
+      // may also come from a screenshot; who's affected (STATED_ONLY) never can.
       const raw = fields[section.id];
       const given = Array.isArray(raw) ? raw : str(raw).split(/\s*(?:,|;|\band\b)\s*/i);
       const ticked = given.map((v) => pick(section.choices, str(v))).filter(Boolean);
-      const named = (choice) => tokens(choice).filter((t) => t !== 'app').every((t) => said.has(t)) && tokens(choice).some((t) => t !== 'app');
-      answers[section.id] = [...new Set(ticked)].filter((c) => hasImages || named(c));
+      const words = (choice) => tokens(choice).filter((t) => !FILLER.has(t));
+      const named = (choice) => words(choice).length > 0 && words(choice).every((t) => said.has(t));
+      const seeable = hasImages && !STATED_ONLY.test(section.title);
+      answers[section.id] = [...new Set(ticked)].filter((c) => seeable || named(c));
       continue;
     }
     if (!section.fields.length) {
