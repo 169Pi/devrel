@@ -1,3 +1,5 @@
+import { formatBytes } from './media.js';
+
 export const CALLBACK = {
   pick: 'issue_template_pick',
   form: 'issue_template_form',
@@ -14,6 +16,8 @@ const TEXTAREA_MAX = 3000;
 const AUTHOR_FIELD = /\b(mastermind|author|owner|submitted by|your name|reporter)/i;
 export const EXTRA_CONTEXT = 'extra_context';
 export const GITHUB_LOGIN_BLOCK = 'github_login';
+export const ATTACHMENTS_BLOCK = 'attachments';
+const MAX_CHECKBOXES = 10;
 
 const text = (value) => ({ type: 'plain_text', text: value, emoji: true });
 const truncate = (s, n) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
@@ -31,12 +35,20 @@ function input(blockId, label, element, { optional = false, hint } = {}) {
 
 const notice = (markdown) => ({ type: 'context', elements: [{ type: 'mrkdwn', text: markdown }] });
 
-export function pickerView(templates, { repo, alpie = false, feedback = '', warning, metadata = {} }) {
-  const options = templates.map((t) => ({
-    text: text(truncate(t.name, OPTION_TEXT_MAX)),
-    value: t.id,
-    ...(t.about && templates.length <= 10 ? { description: text(truncate(t.about, OPTION_TEXT_MAX)) } : {}),
-  }));
+const repoLink = (repo) => `*<https://github.com/${repo}|${repo}>*`;
+
+/** @param repos the owner/repo names templates come from */
+export function pickerView(templates, { repos, alpie = false, feedback = '', warning, metadata = {} }) {
+  const several = repos.length > 1;
+  const options = templates.map((t) => {
+    // With several repos, say where each template files to.
+    const about = [t.about, several && t.repo].filter(Boolean).join(' · ');
+    return {
+      text: text(truncate(t.name, OPTION_TEXT_MAX)),
+      value: t.id,
+      ...(about && templates.length <= 10 ? { description: text(truncate(about, OPTION_TEXT_MAX)) } : {}),
+    };
+  });
   return {
     type: 'modal',
     callback_id: CALLBACK.pick,
@@ -50,7 +62,9 @@ export function pickerView(templates, { repo, alpie = false, feedback = '', warn
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: `Issues are filed in *<https://github.com/${repo}|${repo}>* using its issue templates.`,
+          text: several
+            ? `Issues are filed in ${repos.map(repoLink).join(' or ')}, depending on the template.`
+            : `Issues are filed in ${repoLink(repos[0])} using its issue templates.`,
         },
       },
       input(
@@ -87,17 +101,37 @@ export function pickerView(templates, { repo, alpie = false, feedback = '', warn
  * @param source       Slack permalink the issue was raised from
  * @param githubLogin  the reporter's remembered GitHub username, if known
  * @param origin       { channel, thread } to post the confirmation card in
+ * @param linkFiles    whether issues in this repo link the conversation's files
+ * @param attachments  files from the Slack thread: [{ id, name, size }], all ticked to start with
+ * @param mention      who the issue notifies on GitHub, e.g. "@169Pi/engineering"
  */
 export function formView(
   template,
-  { authorName, initial = {}, extraContext, drafted = false, source, banner, publicRepo, githubLogin, origin } = {},
+  {
+    authorName,
+    initial = {},
+    extraContext,
+    drafted = false,
+    source,
+    banner,
+    publicRepo,
+    githubLogin,
+    origin,
+    linkFiles = false,
+    attachments = [],
+    mention,
+  } = {},
 ) {
   const blocks = [];
   if (banner) blocks.push(notice(banner));
   if (publicRepo && (drafted || source)) {
     blocks.push(notice(':eyes: This repo is *public*. Check the draft for anything internal before creating the issue. Your name and GitHub username will appear on it.'));
   }
-  const meta = [template.about, template.labels.length && `Labels: ${template.labels.map((l) => `\`${l}\``).join(' ')}`]
+  const meta = [
+    template.about,
+    template.repo && `Filed in ${repoLink(template.repo)}${mention ? ` · notifies \`${mention}\`` : ''}`,
+    template.labels.length && `Labels: ${template.labels.map((l) => `\`${l}\``).join(' ')}`,
+  ]
     .filter(Boolean)
     .join('\n');
   if (meta) blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: meta }] });
@@ -161,6 +195,22 @@ export function formView(
         { optional: true, hint: 'Added to the end of the issue. Edit or clear it as you like.' },
       ),
     );
+  }
+
+  if (linkFiles && attachments.length) {
+    const options = attachments.slice(0, MAX_CHECKBOXES).map((f) => ({
+      text: text(truncate(`${f.name}${f.size ? ` (${formatBytes(f.size)})` : ''}`, OPTION_TEXT_MAX)),
+      value: f.id,
+    }));
+    blocks.push(
+      { type: 'divider' },
+      input(ATTACHMENTS_BLOCK, '📎 Files from the conversation', { type: 'checkboxes', options, initial_options: options }, {
+        optional: true,
+        hint: 'Ticked files are linked in the issue. They stay in Slack, so only people in this workspace can open them.',
+      }),
+    );
+  } else if (attachments.length) {
+    blocks.push(notice(`:paperclip: Files from the conversation aren't added to *${template.repo ?? 'this repo'}* issues. Describe what they show.`));
   }
 
   blocks.push(
@@ -269,9 +319,8 @@ export function readAnswers(view) {
   const answers = {};
   for (const [blockId, actions] of Object.entries(view.state?.values ?? {})) {
     const el = actions.value;
-    answers[blockId] = el?.selected_options
-      ? el.selected_options.map((o) => o.value)
-      : (el?.value ?? el?.selected_option?.value ?? '');
+    if (el?.selected_options) answers[blockId] = el.selected_options.map((o) => o.value);
+    else answers[blockId] = el?.value ?? el?.selected_option?.value ?? '';
   }
   return answers;
 }

@@ -19,6 +19,15 @@ export const reporterFromBody = (body) => (body ?? '').match(MARKER)?.[1] ?? nul
 
 const PREVIEW_MAX = 700;
 
+/** Button value for an issue: "owner/repo#12", so clicks act on the right repo. */
+export const issueRef = (repo, number) => (/^[\w.-]+\/[\w.-]+$/.test(repo ?? '') ? `${repo}#${number}` : String(number));
+
+/** Parses a button value. Cards posted before there were several repos carry just the number. */
+export function parseIssueRef(value) {
+  const match = String(value ?? '').match(/^(?:([\w.-]+\/[\w.-]+)#)?(\d+)$/);
+  return match ? { repo: match[1] ?? null, number: Number(match[2]) } : null;
+}
+
 /** Escapes text for Slack mrkdwn so issue content can't inject @channel pings or fake links. */
 export function escapeSlack(text) {
   return String(text ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -79,7 +88,7 @@ export function issueCard(issue, { repo, headline, note } = {}) {
   const labels = (issue.labels ?? []).map((l) => (typeof l === 'string' ? l : l.name)).filter(Boolean);
   const assignees = (issue.assignees ?? []).map((a) => a.login);
   const reporter = reporterFromBody(issue.body) ?? issue.user?.login;
-  const state = open ? ':large_green_circle: Open' : issue.state_reason === 'not_planned' ? ':white_circle: Closed (not planned)' : ':large_purple_circle: Closed';
+  const state = open ? ':large_green_circle: Open' : issue.state_reason === 'not_planned' ? ':white_circle: Closed (not planned)' : ':large_purple_circle: Resolved';
 
   const meta = [
     state,
@@ -89,7 +98,7 @@ export function issueCard(issue, { repo, headline, note } = {}) {
   ].filter(Boolean);
 
   const preview = previewBody(issue.body);
-  const value = String(number);
+  const value = issueRef(repo, number);
   const blocks = [
     ...(headline ? [{ type: 'context', elements: [{ type: 'mrkdwn', text: headline }] }] : []),
     {
@@ -108,12 +117,12 @@ export function issueCard(issue, { repo, headline, note } = {}) {
               button(ACTION.assign, '🙋 Assign to me', value),
               button(ACTION.label, '🏷️ Label', value),
               button(ACTION.comment, '💬 Comment', value),
-              button(ACTION.close, '✅ Close', value, {
-                style: 'danger',
+              button(ACTION.close, '✅ Mark resolved', value, {
+                style: 'primary',
                 confirm: {
-                  title: { type: 'plain_text', text: `Close #${number}?` },
+                  title: { type: 'plain_text', text: `Resolve #${number}?` },
                   text: { type: 'mrkdwn', text: 'This closes the issue on GitHub as completed.' },
-                  confirm: { type: 'plain_text', text: 'Close it' },
+                  confirm: { type: 'plain_text', text: 'Mark resolved' },
                   deny: { type: 'plain_text', text: 'Cancel' },
                 },
               }),

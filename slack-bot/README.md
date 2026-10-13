@@ -8,8 +8,9 @@ It's built to be forked. Everything specific to us (the repo, the templates, the
 
 - **Forms built from your issue templates.** `/alpieca` reads `.github/ISSUE_TEMPLATE/*.md` straight from GitHub and turns each template into a Slack form. Edit a template and the form updates within minutes, no redeploy.
 - **Drafting with Alpie.** Describe the problem in your own words, @mention Alpieca in a thread, or use *Turn into GitHub issue* on any message. Alpie fills in the template from what was actually said, adds useful context for maintainers, and you review everything before it's filed.
+- **Product feedback, with screenshots.** Point Alpieca at a thread, or DM it a screenshot, and it drafts a structured feedback issue in a private product repo. Alpie reads the screenshots, the issue links to the files in Slack, and engineering is tagged. See [Product feedback](#product-feedback).
 - **Ask it things.** DM Alpieca or @mention it with a question ("are there any merch ideas filed already?"). Alpie answers from the templates and recent issues.
-- **Issue cards with triage buttons.** Every new issue, whether filed from Slack or opened on GitHub, appears in Slack as a card with **Assign to me**, **Label**, **Comment** and **Close/Reopen**.
+- **Issue cards with triage buttons.** Every new issue, whether filed from Slack or opened on GitHub, appears in Slack as a card with **Assign to me**, **Label**, **Comment** and **Mark resolved/Reopen**.
 - **Credit for the reporter.** Issues @mention the reporter's GitHub account, not just the bot's.
 
 ```mermaid
@@ -22,7 +23,7 @@ flowchart LR
   D --> B
   B -- "Create issue" --> E[(GitHub issues)]
   E -- "card for the new issue" --> C
-  C -- "assign, label, comment, close" --> E
+  C -- "assign, label, comment, resolve" --> E
   F["Issue opened on GitHub"] -- "GitHub Action" --> C
 ```
 
@@ -34,7 +35,7 @@ flowchart LR
 | `/alpieca merch` | Jump straight to a template by name. |
 | `/alpieca <describe the issue>` | Alpie picks the template and drafts the issue for you to review. |
 | **More actions → Turn into GitHub issue** on a message | Alpie drafts an issue from that message and its whole thread. |
-| `@Alpieca` in a channel or thread, or a DM | Something to raise gets a private *Review Alpie's draft* button; a question gets an answer in the thread. A bare `@Alpieca` in a thread means "turn this thread into an issue". |
+| `@Alpieca` in a channel or thread, or a DM | Something to raise gets a private *Review Alpie's draft* button; a question gets an answer in the thread. A bare `@Alpieca` in a thread means "turn this thread into an issue". A DM with just a screenshot or recording counts as something to raise. |
 | `/alpieca github <username>` | Link your GitHub account (you're also asked the first time you file). |
 | `/alpieca help` | Lists the templates and these options. |
 
@@ -42,9 +43,51 @@ After an issue is created, Alpieca posts its **card** where you raised it: the c
 
 ### Issue cards and triage
 
-Cards show the title, state, labels, reporter and a short preview, plus **View on GitHub**, **🙋 Assign to me**, **🏷️ Label**, **💬 Comment** and **✅ Close** (or **↩️ Reopen**). Each action happens on GitHub, then the card refreshes from GitHub with a note such as *Closed by @Rahul*. Comments are posted with the commenter's name and GitHub username, and are quoted in the card's thread.
+Cards show the title, state, labels, reporter and a short preview, plus **View on GitHub**, **🙋 Assign to me**, **🏷️ Label**, **💬 Comment** and **✅ Mark resolved** (or **↩️ Reopen**). Each action happens on GitHub, then the card refreshes from GitHub with a note such as *Marked resolved by @Rahul*. Resolving closes the issue as completed and, when the card is in a thread, says so in the thread. Comments are posted with the commenter's name and GitHub username, and are quoted in the card's thread.
 
 Issues opened directly on GitHub are posted as the same card by the [`alpieca-new-issue`](../.github/workflows/alpieca-new-issue.yml) workflow. Issues filed from Slack carry a hidden `<!-- alpieca -->` marker, so they're never posted twice.
+
+## Product feedback
+
+Alpieca can also file product feedback into a second, usually private, repo (`FEEDBACK_REPO`), such as a product's own code repo. Nothing from Alpieca has to live in that repo: its template is kept here, in [`feedback-templates/`](feedback-templates), and the bot only needs access to its issues.
+
+The feedback template sits next to the main repo's templates in Slack. Picking a template picks the repo, and Alpie picks for you when drafting.
+
+What's different about feedback issues:
+
+- **A template built for triage.** The *Product Feedback* template asks what engineering needs: product and area, type, what happened, what was expected, steps, who's affected, how often, severity and environment. Required answers must be filled in before filing. Alpie leaves severity and frequency blank unless the reporter said them. Edit [`feedback-templates/product-feedback.md`](feedback-templates/product-feedback.md) on `main` and the form updates within minutes, no redeploy.
+- **Screenshots.** Alpie looks at up to four images from the thread and uses what they show: the product, the screen, and exact error messages.
+- **Files stay in Slack.** The form lists the thread's files, all ticked. Ticked files are linked from the issue, and only people in the Slack workspace can open them. Nothing is copied to GitHub. Files in a private channel or DM can only be opened by people in it.
+- **The team is tagged.** Issues end with `cc @169Pi/engineering` (`FEEDBACK_GITHUB_MENTION`). GitHub can't assign issues to a team, so people take them with **Assign to me**. Set `FEEDBACK_SLACK_MENTION` to a Slack user group ID to tag the team in the thread too.
+- **The card goes back to the thread** it came from, with **View on GitHub**, **Assign to me**, **Comment** and **Mark resolved**.
+
+The main repo works as before, and its issues never link Slack files.
+
+### Setting up a feedback repo
+
+The repo must already exist with **Issues** turned on (*Settings → General → Features*).
+
+**1. A GitHub token for its issues.** Use a separate token, so the bot can't read the repo's code. Ideally create it from a dedicated bot account rather than a person's.
+1. Go to [github.com/settings/personal-access-tokens/new](https://github.com/settings/personal-access-tokens/new).
+2. **Token name:** `alpieca-feedback`. **Expiration:** your org's maximum, with a reminder to rotate it.
+3. **Resource owner:** the organization that owns the repo, e.g. `169Pi`.
+4. **Repository access:** *Only select repositories* → the feedback repo.
+5. **Permissions → Repository permissions → Issues:** *Read and write*. Leave everything else at *No access*. (*Metadata: Read-only* is added automatically.)
+6. **Generate token**, and copy it. If the org requires approval for fine-grained tokens, the token works only after an org owner approves it under *Organization settings → Personal access tokens → Pending requests*.
+7. Put it on the server as `FEEDBACK_GITHUB_TOKEN`.
+
+The main `GITHUB_TOKEN` keeps its own access to the main repo, where the feedback template lives. It needs nothing on the feedback repo.
+
+**2. Make the `@169Pi/engineering` mention reach people.** GitHub only notifies people who can see the repo, and only lets an account mention a team it can see. So:
+1. The token's account must be a member of the org. Check at `github.com/orgs/169Pi/people`.
+2. The team must have access to the feedback repo: in the repo, *Settings → Collaborators and teams → Add teams → engineering*, role *Triage* (lets them label, assign and close) or higher.
+3. The team must be *Visible* (*Organization → Teams → engineering → Settings*), not secret.
+
+To check, open any issue in the repo, type `@169Pi/eng` in a comment box, and see that the team is suggested.
+
+**3. A `feedback` label.** In the repo, *Issues → Labels → New label* → `feedback`. Without it GitHub drops the label, and the card says so.
+
+**4. Turn it on.** On the bot's server, set `FEEDBACK_REPO=169Pi/<repo>` and `FEEDBACK_GITHUB_TOKEN`, optionally `FEEDBACK_SLACK_MENTION`, and restart. Paste the updated [`manifest.yml`](manifest.yml) into the Slack app and **Reinstall to Workspace**, which adds the `files:read` scope Alpieca needs to read screenshots. The startup log lists both repos, with `(private)` after the feedback repo.
 
 ## How templates become forms
 
@@ -74,6 +117,8 @@ The bot doesn't take Alpie's output on trust:
 - **Links:** any link that wasn't in the original conversation is removed, so made-up URLs never reach GitHub. Answers can only link to real issues, the repo, or the conversation.
 - **Instructions inside messages:** Slack content is passed to Alpie as data, so instructions written in a message are ignored.
 - **Invented reasons:** the prompt tells Alpie not to make up reasons or pitches that nobody gave.
+- **Guessed ratings:** severity and frequency answers are dropped unless the reporter used those words.
+- **Stuck replies:** drafts must match a JSON schema. A reply that gets stuck is cut off and retried.
 - **Failures:** if Alpie fails or times out, the reporter falls back to the normal form, and their original text is kept.
 
 **Speed.** Alpieca uses Alpie Seed 9B with reasoning mode off, so most drafts and answers arrive in a few seconds. Reasoning mode (`ALPIE_THINKING=true`) can take 10–20 seconds and isn't usually needed to fill in a template. Alpieca hides the wait in two ways:
@@ -84,10 +129,13 @@ The bot doesn't take Alpie's output on trust:
 
 ## Access and privacy
 
-Issues land in a **public** repo under the bot's GitHub token, so access is deliberately narrow:
+Issues land in a **public** repo (and optionally a private feedback repo) under the bot's GitHub token, so access is deliberately narrow:
 
 - **Workspace members only.** People from other organizations (for example in Slack Connect channels) can't file issues, use Alpie, or press triage buttons. Messages from them are ignored.
-- **Triage buttons are for full members.** Guests can raise issues but can't assign, label, comment on or close them. Set `SLACK_TRIAGE_USERS` to limit triage to specific people.
+- **Triage buttons are for full members.** Guests can raise issues but can't assign, label, comment on or resolve them. Set `SLACK_TRIAGE_USERS` to limit triage to specific people.
+- **Private repos are for full members.** Guests can't file into a private repo, and Alpie's answers to guests only mention issues in public repos.
+- **Files stay in Slack.** Feedback issues only link files that stay ticked in the form, and only workspace members can open those links. Nothing is copied to GitHub, and main-repo issues never link files.
+- **The feedback token can't read code.** It only has Issues access to the feedback repo.
 - **Private conversations stay private.** An issue drafted from a public channel links back to its source thread. Issues drafted from private channels and DMs don't include a link.
 - **Reporters see a warning.** Before filing a draft, the form reminds them the repo is public and that their name and GitHub username will appear on the issue.
 - **Content from GitHub is escaped.** Issue titles and bodies can't ping `@channel` or fake links in Slack.
@@ -151,6 +199,11 @@ Invite the bot to that channel. Set the bot's `SLACK_NOTIFY_CHANNEL` to the same
 | `SLACK_TRIAGE_USERS` | | Comma-separated Slack user IDs allowed to triage. Defaults to all full members. |
 | `DATA_DIR` | | Where Slack-to-GitHub username links are stored. Defaults to `~/.alpieca`. Keep it on persistent storage. |
 | `TEMPLATE_DIR`, `TEMPLATE_CACHE_SECONDS` | | Read templates from disk instead of GitHub, and how long to cache them. Defaults: GitHub, 300 s. |
+| `FEEDBACK_REPO` | | `owner/repo` that product feedback is filed into. See [Product feedback](#product-feedback). |
+| `FEEDBACK_GITHUB_TOKEN` | | Token with Issues read/write on `FEEDBACK_REPO` only. Defaults to `GITHUB_TOKEN`. |
+| `FEEDBACK_GITHUB_MENTION` | | Who feedback issues notify on GitHub. Defaults to `@169Pi/engineering`. Empty turns it off. |
+| `FEEDBACK_SLACK_MENTION` | | Slack user group (`S…`) or user (`U…`) ID to tag on feedback cards. |
+| `FEEDBACK_TEMPLATE_PATH`, `FEEDBACK_TEMPLATE_DIR` | | Where feedback templates come from: a folder in the main repo (default `slack-bot/feedback-templates`), or a folder on disk for development. |
 
 ## Hosting
 
@@ -192,6 +245,9 @@ The tests parse the real templates in `../.github/ISSUE_TEMPLATE`. They cover:
 | `src/access.js` | Who may use the bot, and which channels are public. |
 | `src/people.js` | Stored Slack-to-GitHub username links. |
 | `src/github.js` | GitHub API calls. |
+| `src/repos.js` | The repos Alpieca files into, each with its own templates. |
+| `src/media.js` | Files from Slack: picking them out of threads and showing images to Alpie. |
+| `feedback-templates/` | Issue templates for the feedback repo, read from here so that repo holds no Alpieca files. |
 | `scripts/post-github-issue.js` | Run by the workflow to post GitHub-opened issues to Slack. |
 
 ## License

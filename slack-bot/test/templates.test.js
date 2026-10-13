@@ -111,7 +111,7 @@ test('modal views respect Slack limits and round-trip answers', () => {
   const alpie = formView(byName('Alpie'), { authorName: 'Ada Lovelace' });
   assert.equal(alpie.blocks.find((b) => b.block_id === 's0f1').element.initial_value, 'Ada Lovelace');
 
-  const picker = pickerView(templates, { repo: '169Pi/devrel' });
+  const picker = pickerView(templates, { repos: ['169Pi/devrel'] });
   assert.equal(picker.blocks[1].element.options.length, 2);
   const state = { values: { template: { value: { type: 'radio_buttons', selected_option: { value: 'x.md' } } }, title: { value: { value: 'hi' } } } };
   assert.deepEqual(readAnswers({ state }), { template: 'x.md', title: 'hi' });

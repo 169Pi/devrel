@@ -11,9 +11,11 @@ export function createGitHub({ token, repo, ref, logger = console }) {
   });
 
   return {
+    repo,
+
     /** Reads the templates from the repo itself, so Slack always matches GitHub. */
-    async loadTemplates() {
-      const { data: listing } = await octokit.repos.getContent({ owner, repo: name, path: TEMPLATE_DIR, ref });
+    async loadTemplates(dir = TEMPLATE_DIR) {
+      const { data: listing } = await octokit.repos.getContent({ owner, repo: name, path: dir, ref });
       const files = (Array.isArray(listing) ? listing : []).filter(
         (f) => f.type === 'file' && isTemplateFile(f.name),
       );
@@ -54,6 +56,7 @@ export function createGitHub({ token, repo, ref, logger = console }) {
         .filter((i) => !i.pull_request)
         .slice(0, limit)
         .map((i) => ({
+          repo,
           number: i.number,
           title: i.title,
           state: i.state,
