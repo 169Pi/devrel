@@ -1,0 +1,28 @@
+#!/bin/bash
+# Start script for running Alpieca on AWS EC2 with its settings in SSM Parameter Store.
+#
+# Every parameter under $PARAM_PATH becomes a setting: /alpieca/FEEDBACK_REPO -> FEEDBACK_REPO.
+# Store secrets (tokens) as SecureString. The instance role needs ssm:GetParametersByPath on the
+# path, and kms:Decrypt on the key the SecureStrings use.
+#
+#   sudo install -m 755 deploy/alpieca-start /usr/local/bin/alpieca-start
+#   # in deploy/alpieca.service: ExecStart=/usr/local/bin/alpieca-start, and drop EnvironmentFile
+#
+# To change a setting, edit the parameter, then `sudo systemctl restart alpieca`.
+set -euo pipefail
+
+PARAM_PATH="${PARAM_PATH:-/alpieca/}"
+APP_DIR="${APP_DIR:-/opt/alpieca/slack-bot}"
+NODE="${NODE:-node}"
+
+# The instance's region, from the metadata service (IMDSv2).
+imds=$(curl -sf -X PUT http://169.254.169.254/latest/api/token -H "X-aws-ec2-metadata-token-ttl-seconds: 60")
+export AWS_DEFAULT_REGION=$(curl -sf -H "X-aws-ec2-metadata-token: $imds" http://169.254.169.254/latest/meta-data/placement/region)
+
+while IFS=$'\t' read -r name value; do
+  export "${name#"$PARAM_PATH"}=$value"
+done < <(aws ssm get-parameters-by-path --path "$PARAM_PATH" --with-decryption \
+           --query 'Parameters[*].[Name,Value]' --output text)
+
+cd "$APP_DIR"
+exec "$NODE" src/app.js

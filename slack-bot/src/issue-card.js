@@ -35,15 +35,18 @@ export function escapeSlack(text) {
 
 /**
  * Turns an issue body (often one of our templates) into a short Slack preview:
- * headings become bold labels, unanswered sections, comments, images and the
- * Alpieca footer are dropped, and the result is cut at a line boundary.
+ * headings become bold labels, unanswered sections, comments, images, unticked
+ * checkboxes and the Alpieca footer are dropped, and the result is cut at a line boundary.
  */
 export function previewBody(body) {
   const cleaned = String(body ?? '')
     .replace(/<!--[\s\S]*?-->/g, '')
     .replace(/\n---\n<sub>[\s\S]*$/, '')
     .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
-    .replace(/<img\b[^>]*>/gi, '');
+    .replace(/<img\b[^>]*>/gi, '')
+    // Task lists (e.g. "Which products?"): show what's ticked, drop the rest.
+    .replace(/^[ \t]*[-*] \[ \] .*(?:\r?\n|$)/gm, '')
+    .replace(/^([ \t]*)[-*] \[[xX]\] /gm, '$1☑ ');
 
   // Drop sections whose only content is "_No response_".
   const sections = cleaned.split(/\n(?=#{1,6} )/).filter((s) => !/^#{1,6} .*\n\s*_No response_\s*$/.test(s.trim()));

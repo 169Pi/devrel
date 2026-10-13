@@ -4,11 +4,11 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { buildAnswerMessages, buildDraftMessages, draftSchema, parseDraft } from '../src/alpie.js';
 import { loadConfig } from '../src/config.js';
-import { issueCard, issueRef, parseIssueRef } from '../src/issue-card.js';
+import { issueCard, issueRef, parseIssueRef, previewBody } from '../src/issue-card.js';
 import { downloadSlackFile, filesIn, imagesForAlpie } from '../src/media.js';
 import { ATTACHMENTS_BLOCK, formView, readAnswers } from '../src/modal.js';
 import { createRepos, qualify } from '../src/repos.js';
-import { findTemplate, loadLocalTemplates, renderIssue } from '../src/templates.js';
+import { findTemplate, loadLocalTemplates, parseTemplate, renderIssue } from '../src/templates.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const DEVREL_TEMPLATES = path.resolve(HERE, '../../.github/ISSUE_TEMPLATE');
@@ -17,6 +17,8 @@ const silent = { warn() {}, error() {} };
 const BASE_ENV = { SLACK_BOT_TOKEN: 'x', SLACK_APP_TOKEN: 'x', GITHUB_TOKEN: 'x' };
 
 const feedbackTemplate = qualify(await loadLocalTemplates(FEEDBACK_TEMPLATES, silent), '169Pi/feedback')[0];
+/** The feedback template's bullet field ids by label, e.g. ids.Severity. */
+const ids = Object.fromEntries(feedbackTemplate.sections.flatMap((s) => s.fields.map((f) => [f.label, f.id])));
 
 /** A fake GitHub client per repo; `private` repos report themselves as such. */
 function fakeGitHub({ priv = [] } = {}) {
@@ -101,12 +103,36 @@ test('the feedback repo can have its own token, and its templates can come from 
     },
   );
   await repos.start();
+  assert.equal(repos.describe(), '169Pi/devrel and 169Pi/app-alpie (private)');
   assert.equal(repos.get('169Pi/devrel').github.token, 'main');
   assert.equal(repos.get('169Pi/app-alpie').github.token, 'issues-only');
   assert.deepEqual(loaded.sort(), ['169Pi/devrel/.github/ISSUE_TEMPLATE', '169Pi/devrel/slack-bot/feedback-templates']);
   const feedback = (await repos.templates()).find((t) => t.repo === '169Pi/app-alpie');
   assert.equal(feedback.id, '169Pi/app-alpie:product-feedback.md');
   assert.equal(repos.get('169Pi/app-alpie').public, false);
+});
+
+test("a repo the token can't read is reported, and kept from guests", async () => {
+  const warnings = [];
+  const repos = createRepos(
+    [{ repo: '169Pi/devrel', templateDir: DEVREL_TEMPLATES }, { repo: '169Pi/app-alpie', templateDir: FEEDBACK_TEMPLATES }],
+    {
+      token: 't',
+      logger: { warn: (m) => warnings.push(m), error() {} },
+      makeGitHub: ({ repo }) => ({
+        repo,
+        isPublic: async () => {
+          if (repo.endsWith('app-alpie')) throw Object.assign(new Error('Not Found'), { status: 404 });
+          return true;
+        },
+      }),
+    },
+  );
+  await repos.start();
+  assert.equal(repos.describe(), '169Pi/devrel and 169Pi/app-alpie (no access: token has no access)');
+  assert.match(warnings.join('\n'), /Can't read 169Pi\/app-alpie .*Filing issues there will fail/);
+  assert.ok((await repos.templates({ guest: true })).every((t) => t.repo === '169Pi/devrel'));
+  assert.ok((await repos.templates()).some((t) => t.repo === '169Pi/app-alpie'), 'members still see it, so the error surfaces when filing');
 });
 
 test('a feedback repo that fails to load does not stop the bot', async () => {
@@ -135,15 +161,18 @@ test('card buttons carry the repo, and old number-only values still parse', () =
 test('the feedback template asks the triage questions', () => {
   assert.equal(feedbackTemplate.titlePrefix, '[Feedback]: ');
   assert.deepEqual(feedbackTemplate.labels, ['feedback']);
-  const fields = feedbackTemplate.sections.flatMap((s) => s.fields.map((f) => [f.label, f.optional]));
+  const products = feedbackTemplate.sections[0];
+  assert.equal(products.title, '📱 Which products?');
+  assert.deepEqual(products.choices, ['iOS App', 'Android App', 'API', 'Playground', 'Alpie Chat']);
+  assert.equal(products.optional, false);
+  const fields = feedbackTemplate.sections.flatMap((s) => s.fields.map((f) => [f.label, f.optional, f.options]));
   assert.deepEqual(fields, [
-    ['Product', false],
-    ['Area or screen', false],
-    ['Type (bug, UX problem, feature request, praise)', false],
-    ['Who is affected (you, a teammate, a customer)', false],
-    ['How often (every time, sometimes, once)', false],
-    ['Severity (blocker, major, minor, cosmetic)', false],
-    ['Version, browser, device or OS', true],
+    ['Area or screen', false, null],
+    ['Type', false, ['Bug', 'UX problem', 'Feature request', 'Praise']],
+    ['Who is affected', false, ['Just me', 'Teammates', 'Customers', 'Everyone']],
+    ['How often', false, ['Every time', 'Sometimes', 'Once']],
+    ['Severity', false, ['Blocker', 'Major', 'Minor', 'Cosmetic']],
+    ['App version or device', true, null],
   ]);
   assert.ok(feedbackTemplate.sections.find((s) => s.title.startsWith('🔁')).optional);
 });
@@ -233,7 +262,6 @@ test('the draft schema lists fields in document order, so no template loses fiel
   const repos = await twoRepos();
   const all = await repos.templates();
   const order = Object.keys(draftSchema(all).properties.fields.properties);
-  assert.deepEqual(order.slice(0, 6), ['s0', 's0f0', 's0f1', 's0f2', 's1', 's2']);
   // Each template's own fields appear in the order the template has them.
   for (const t of all) {
     const own = t.sections.flatMap((sec) => (sec.fields.length ? sec.fields.map((f) => f.id) : [sec.id]));
@@ -241,27 +269,139 @@ test('the draft schema lists fields in document order, so no template loses fiel
   }
 });
 
-test('Alpie is told not to guess severity or frequency', () => {
-  const [, user] = buildDraftMessages({ templates: [feedbackTemplate], feedback: 'x' });
-  const fields = JSON.parse(user.content.match(/\[[\s\S]*\]/)[0])[0].fields;
-  const flagged = Object.values(fields).filter((f) => f.only_if_stated).map((f) => f.label);
-  assert.deepEqual(flagged, ['How often (every time, sometimes, once)', 'Severity (blocker, major, minor, cosmetic)']);
+test('the draft schema pins checkboxes and dropdowns to their options, and needs every field', () => {
+  const fields = draftSchema([feedbackTemplate]).properties.fields;
+  assert.deepEqual(fields.required, Object.keys(fields.properties));
+  assert.deepEqual(fields.properties.s0, { type: 'array', items: { type: 'string', enum: ['iOS App', 'Android App', 'API', 'Playground', 'Alpie Chat'] } });
+  assert.deepEqual(fields.properties[ids.Severity], { type: 'string', enum: ['Blocker', 'Major', 'Minor', 'Cosmetic', ''] });
+  assert.deepEqual(fields.properties[ids['Area or screen']], { type: 'string' });
 });
 
-test('severity and frequency are dropped unless the reporter said them', () => {
-  const reply = (fields) => JSON.stringify({ title: 'Export broken', template_id: feedbackTemplate.id, fields, additional_context: '' });
-  const ids = Object.fromEntries(feedbackTemplate.sections.flatMap((s) => s.fields.map((f) => [f.label.split(' ')[0], f.id])));
-  const guessed = parseDraft(reply({ [ids.Severity]: 'major', [ids.How]: 'sometimes', [ids.Product]: 'Playground' }), [feedbackTemplate], {
-    feedback: 'export is broken again',
+test("Alpie gets the options, and is told not to guess who's affected or how often", () => {
+  const [system, user] = buildDraftMessages({ templates: [feedbackTemplate], feedback: 'x' });
+  const fields = Object.values(JSON.parse(user.content.match(/\[[\s\S]*\]/)[0])[0].fields);
+  assert.deepEqual(fields.filter((f) => f.only_if_stated).map((f) => f.label), ['Who is affected', 'How often', 'App version or device']);
+  assert.deepEqual(fields.find((f) => f.label === 'Severity').options, ['Blocker', 'Major', 'Minor', 'Cosmetic']);
+  assert.equal(fields.find((f) => f.label === 'Severity').single_line, undefined);
+  assert.equal(fields.find((f) => f.label === 'Area or screen').single_line, true);
+  const products = fields.find((f) => f.label === '📱 Which products?');
+  assert.equal(products.pick_any_number, true);
+  assert.deepEqual(products.options, ['iOS App', 'Android App', 'API', 'Playground', 'Alpie Chat']);
+  // Problem reports get a full draft; pitches keep the no-invention rules.
+  assert.match(system.content, /Problem reports .* make a complete first draft/);
+  assert.match(system.content, /"Steps to reproduce": write the likely steps/);
+  assert.match(system.content, /If they only say "the app", tick none/);
+  assert.match(system.content, /Ideas and pitches[\s\S]*Never write persuasive/);
+});
+
+test("dropdown answers snap to an option, and who's affected / how often need the reporter's words", () => {
+  const reply = (fields) => JSON.stringify({ title: 'Login freezes', template_id: feedbackTemplate.id, fields, additional_context: '' });
+  const guessed = parseDraft(
+    reply({ [ids.Severity]: 'blocker', [ids.Type]: 'nonsense', [ids['How often']]: 'Sometimes', [ids['Who is affected']]: 'Customers', [ids['Area or screen']]: 'Login screen' }),
+    [feedbackTemplate],
+    { feedback: 'login screen of the app freezes' },
+  );
+  assert.equal(guessed.answers[ids.Severity], 'Blocker', 'judged by Alpie, snapped to the option');
+  assert.equal(guessed.answers[ids.Type], '', 'not an option');
+  assert.equal(guessed.answers[ids['How often']], '', 'not said');
+  assert.equal(guessed.answers[ids['Who is affected']], '', 'not said');
+  assert.equal(guessed.answers[ids['Area or screen']], 'Login screen', 'text fields untouched');
+  assert.equal(parseDraft(reply({ [ids.Type]: 'UX' }), [feedbackTemplate], { feedback: 'x' }).answers[ids.Type], 'UX problem', 'prefix of an option');
+
+  const said = parseDraft(reply({ [ids['How often']]: 'Every time', [ids['Who is affected']]: 'Customers' }), [feedbackTemplate], {
+    feedback: 'a customer reported it, and it happens every time',
   });
-  assert.equal(guessed.answers[ids.Severity], '');
-  assert.equal(guessed.answers[ids.How], '');
-  assert.equal(guessed.answers[ids.Product], 'Playground', 'other fields are untouched');
-  const said = parseDraft(reply({ [ids.Severity]: 'Blocker', [ids.How]: 'every time' }), [feedbackTemplate], {
-    feedback: "it's a blocker for us, happens every time",
+  assert.equal(said.answers[ids['How often']], 'Every time');
+  assert.equal(said.answers[ids['Who is affected']], 'Customers', '"a customer" counts for "Customers"');
+});
+
+test('product ticks come from screenshots or named products, never from "the app"', () => {
+  const reply = (s0) => JSON.stringify({ title: 't', template_id: feedbackTemplate.id, fields: { s0 }, additional_context: '' });
+  const guess = reply(['iOS App', 'Android App', 'Teams App', 'ios app']);
+  assert.deepEqual(parseDraft(guess, [feedbackTemplate], { feedback: 'login screen of the app freezes' }).answers.s0, [], '"the app" names none');
+  assert.deepEqual(parseDraft(guess, [feedbackTemplate], { feedback: 'x', hasImages: true }).answers.s0, ['iOS App', 'Android App'], 'seen; unknown and duplicates dropped');
+  assert.deepEqual(
+    parseDraft(reply(['iOS App', 'Playground', 'Alpie Chat']), [feedbackTemplate], { feedback: 'frozen on iOS and in alpie chat' }).answers.s0,
+    ['iOS App', 'Alpie Chat'],
+    'named',
+  );
+  assert.deepEqual(parseDraft(JSON.stringify({ title: 't', template_id: feedbackTemplate.id, fields: { s0: 'iOS App' }, additional_context: '' }), [feedbackTemplate], { feedback: 'ios' }).answers.s0, [], 'not a list');
+});
+
+test("versions need the reporter's words, and emails Alpie read off a screenshot are removed", () => {
+  const happened = feedbackTemplate.sections.find((s) => s.title.startsWith('📝')).id;
+  const draft = parseDraft(
+    JSON.stringify({
+      title: 'Login freezes for vishal@example.com',
+      template_id: feedbackTemplate.id,
+      fields: { [ids['App version or device']]: 'iOS 17.4.1', [happened]: 'Stuck on Signing in for vishal@example.com; ask help@169pi.ai' },
+      additional_context: '- User email is vishal@example.com',
+    }),
+    [feedbackTemplate],
+    { feedback: 'login is frozen, see screenshot. ping help@169pi.ai' },
+  );
+  assert.equal(draft.answers[ids['App version or device']], '', 'version not typed');
+  assert.equal(draft.answers[happened], 'Stuck on Signing in for [email removed]; ask help@169pi.ai', 'typed emails stay');
+  assert.equal(draft.answers.title, 'Login freezes for [email removed]');
+  assert.equal(draft.additionalContext, '- User email is [email removed]');
+  const typed = parseDraft(
+    JSON.stringify({ title: 't', template_id: feedbackTemplate.id, fields: { [ids['App version or device']]: 'v2.3.1 on Pixel 8' }, additional_context: '' }),
+    [feedbackTemplate],
+    { feedback: 'frozen on v2.3.1, my Pixel 8' },
+  );
+  assert.equal(typed.answers[ids['App version or device']], 'v2.3.1 on Pixel 8');
+});
+
+test('platform fields are kept from screenshots or words, never from a guess', () => {
+  const t = qualify([parseTemplate('bug.md', '---\nname: Bug\n---\n### Where\n* **Platform (iOS, Android, All platforms):** \n')], 'a/b')[0];
+  const reply = (v) => JSON.stringify({ title: 't', template_id: t.id, fields: { s0f0: v }, additional_context: '' });
+  assert.equal(parseDraft(reply('All platforms'), [t], { feedback: 'login screen freezes' }).answers.s0f0, '', 'guessed from words alone');
+  assert.equal(parseDraft(reply('iOS'), [t], { feedback: 'login freezes', hasImages: true }).answers.s0f0, 'iOS', 'read off a screenshot');
+  assert.equal(parseDraft(reply('iOS'), [t], { feedback: 'login freezes on my ios phone' }).answers.s0f0, 'iOS', 'said');
+});
+
+test('an answer slipped into the field above (Product = Area) is cleared', () => {
+  const t = qualify([parseTemplate('bug.md', '---\nname: Bug\n---\n### Where\n* **Product:** \n* **Area or screen:** \n')], 'a/b')[0];
+  const reply = (product) => JSON.stringify({ title: 't', template_id: t.id, fields: { s0f0: product, s0f1: 'Login screen' }, additional_context: '' });
+  const slipped = parseDraft(reply('login screen'), [t], { feedback: 'x' });
+  assert.equal(slipped.answers.s0f0, '');
+  assert.equal(slipped.answers.s0f1, 'Login screen');
+  assert.equal(parseDraft(reply('Alpie'), [t], { feedback: 'x' }).answers.s0f0, 'Alpie');
+});
+
+test('option fields become dropdowns, with Alpie\'s pick selected', () => {
+  const view = formView(feedbackTemplate, { initial: { [ids.Severity]: 'Blocker', [ids.Type]: 'nonsense' } });
+  const block = (id) => view.blocks.find((b) => b.block_id === id);
+  const severity = block(ids.Severity).element;
+  assert.equal(severity.type, 'static_select');
+  assert.deepEqual(severity.options.map((o) => o.value), ['Blocker', 'Major', 'Minor', 'Cosmetic']);
+  assert.equal(severity.initial_option.value, 'Blocker');
+  assert.equal(block(ids.Type).element.initial_option, undefined, 'unknown values leave it unselected');
+  assert.equal(block(ids['Area or screen']).element.type, 'plain_text_input');
+  // Dropdown answers come back like any other answer, and render into the template's layout.
+  const answers = readAnswers({ state: { values: { [ids.Severity]: { value: { type: 'static_select', selected_option: { value: 'Major' } } } } } });
+  assert.equal(answers[ids.Severity], 'Major');
+  assert.match(renderIssue(feedbackTemplate, { title: 'x', ...answers }).body, /\* \*\*Severity \(Blocker, Major, Minor, Cosmetic\):\*\* Major/);
+});
+
+test('product checkboxes: ticked in the form, read back as a list, and a task list on GitHub', () => {
+  const view = formView(feedbackTemplate, { initial: { s0: ['iOS App', 'Alpie Chat'] } });
+  const boxes = view.blocks.find((b) => b.block_id === 's0');
+  assert.equal(boxes.optional, false, 'at least one product');
+  assert.equal(boxes.element.type, 'checkboxes');
+  assert.deepEqual(boxes.element.options.map((o) => o.value), ['iOS App', 'Android App', 'API', 'Playground', 'Alpie Chat']);
+  assert.deepEqual(boxes.element.initial_options.map((o) => o.value), ['iOS App', 'Alpie Chat']);
+  assert.equal(formView(feedbackTemplate).blocks.find((b) => b.block_id === 's0').element.initial_options, undefined);
+
+  const answers = readAnswers({
+    state: { values: { s0: { value: { type: 'checkboxes', selected_options: [{ value: 'Android App' }, { value: 'API' }] } } } },
   });
-  assert.equal(said.answers[ids.Severity], 'Blocker');
-  assert.equal(said.answers[ids.How], 'every time');
+  const issue = renderIssue(feedbackTemplate, { title: 'x', ...answers });
+  assert.match(issue.body, /### 📱 Which products\?\n- \[ \] iOS App\n- \[x\] Android App\n- \[x\] API\n- \[ \] Playground\n- \[ \] Alpie Chat\n/);
+  // The Slack card shows only what's ticked.
+  const preview = previewBody(issue.body);
+  assert.match(preview, /\*📱 Which products\?\*\n☑ Android App\n☑ API\n/);
+  assert.doesNotMatch(preview, /iOS App|\[ \]/);
 });
 
 test('answers know about both repos', () => {

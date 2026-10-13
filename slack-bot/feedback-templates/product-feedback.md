@@ -7,11 +7,18 @@ assignees: ''
 
 ---
 
+### 📱 Which products?
+*Tick every product where you've seen it.*
+- [ ] iOS App
+- [ ] Android App
+- [ ] API
+- [ ] Playground
+- [ ] Alpie Chat
+
 ### 🧭 Where is it?
-*Which product and which part of it. Screenshots help a lot.*
-* **Product:** 
+*Which part of the product. Screenshots help a lot.*
 * **Area or screen:** 
-* **Type (bug, UX problem, feature request, praise):** 
+* **Type (Bug, UX problem, Feature request, Praise):** 
 
 ### 📝 What happened?
 *What you saw, or what's missing, in your own words. Quote any error message exactly.*
@@ -27,9 +34,9 @@ assignees: ''
 
 ### 📈 Impact
 *Helps engineering decide what to look at first.*
-* **Who is affected (you, a teammate, a customer):** 
-* **How often (every time, sometimes, once):** 
-* **Severity (blocker, major, minor, cosmetic):** 
+* **Who is affected (Just me, Teammates, Customers, Everyone):** 
+* **How often (Every time, Sometimes, Once):** 
+* **Severity (Blocker, Major, Minor, Cosmetic):** 
 
 ### 💻 Environment (optional)
-* **Version, browser, device or OS:** 
+* **App version or device:** 
