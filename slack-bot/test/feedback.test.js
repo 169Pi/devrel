@@ -272,7 +272,8 @@ test('the draft schema lists fields in document order, so no template loses fiel
 test('the draft schema pins checkboxes and dropdowns to their options, and needs every field', () => {
   const fields = draftSchema([feedbackTemplate]).properties.fields;
   assert.deepEqual(fields.required, Object.keys(fields.properties));
-  assert.deepEqual(fields.properties.s0, { type: 'array', items: { type: 'string', enum: ['iOS App', 'Android App', 'API', 'Playground', 'Alpie Chat'] } });
+  // Checkboxes are one comma-separated string: as a JSON list, Alpie Seed got stuck after the first item.
+  assert.deepEqual(fields.properties.s0, { type: 'string' });
   assert.deepEqual(fields.properties[ids.Severity], { type: 'string', enum: ['Blocker', 'Major', 'Minor', 'Cosmetic', ''] });
   assert.deepEqual(fields.properties[ids['Area or screen']], { type: 'string' });
 });
@@ -325,7 +326,10 @@ test('product ticks come from screenshots or named products, never from "the app
     ['iOS App', 'Alpie Chat'],
     'named',
   );
-  assert.deepEqual(parseDraft(JSON.stringify({ title: 't', template_id: feedbackTemplate.id, fields: { s0: 'iOS App' }, additional_context: '' }), [feedbackTemplate], { feedback: 'ios' }).answers.s0, [], 'not a list');
+  const text = (s0, feedback) => parseDraft(JSON.stringify({ title: 't', template_id: feedbackTemplate.id, fields: { s0 }, additional_context: '' }), [feedbackTemplate], { feedback, hasImages: true }).answers.s0;
+  assert.deepEqual(text('iOS App, api; Alpie Chat and Playground', 'x'), ['iOS App', 'API', 'Alpie Chat', 'Playground'], 'comma-separated, as Alpie writes it');
+  assert.deepEqual(text('', 'x'), []);
+  assert.deepEqual(text('Windows', 'x'), []);
 });
 
 test("versions need the reporter's words, and emails Alpie read off a screenshot are removed", () => {

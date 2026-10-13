@@ -106,6 +106,21 @@ test('a draft stuck emitting whitespace is cut off and tried again', async () =>
   assert.equal(stuckCalls, 3);
 });
 
+test('when drafting fails after Alpie picked a template, the error says which one', async () => {
+  const picked = { id: 'b.md', titlePrefix: '', sections: [{ id: 's0', fields: [] }] };
+  const other = { id: 'a.md', titlePrefix: '', sections: [{ id: 's0', fields: [] }] };
+  let calls = 0;
+  const fetchImpl = async (url, init) => {
+    calls++;
+    // The pick works; every draft gets stuck.
+    return streamingFetch(calls === 1 ? JSON.stringify({ template_id: 'b.md' }) : `{"title": "x",${'\n'.repeat(100)}`)(url, init);
+  };
+  const alpie = createAlpie({ baseUrl: 'https://x', model: 'm', timeoutMs: 5000, fetchImpl });
+  const err = await alpie.draft({ templates: [other, picked], feedback: 'x' }).then(() => null, (e) => e);
+  assert.match(err.message, /got stuck/);
+  assert.equal(err.template, picked);
+});
+
 test('drafts stream with progress updates and still parse', async () => {
   const content = `Reasoning about the hoodie at length…\n</think>\n\n${JSON.stringify({
     template_id: 'm.md',
