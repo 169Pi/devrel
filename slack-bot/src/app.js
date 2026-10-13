@@ -171,8 +171,10 @@ async function draftIntoView({
     if (!(err instanceof AlpieError)) logger.error(err);
     else logger.warn(`Alpie draft failed: ${err.message}`);
     const warning = `:warning: ${err instanceof AlpieError ? err.message : 'Alpie ran into a problem'}.`;
-    view = template
-      ? formFor(template, userId, authorName, {
+    // The template asked for, or the one Alpie picked before drafting failed.
+    const fallback = template ?? err.template;
+    view = fallback
+      ? formFor(fallback, userId, authorName, {
           extraContext: feedback,
           source,
           origin,
@@ -181,7 +183,10 @@ async function draftIntoView({
         })
       : pickerFor(all, { feedback, warning: `${warning} Pick a template and try again.`, metadata: { origin, source } });
   }
-  await client.views.update({ view_id: viewId, view }).catch((err) => logger.warn(`views.update failed: ${err.message}`));
+  await client.views
+    .update({ view_id: viewId, view })
+    // Slack explains rejected views in response_metadata.messages; without them the modal just freezes.
+    .catch((err) => logger.warn(`views.update failed: ${err.data?.error ?? err.message} ${JSON.stringify(err.data?.response_metadata?.messages ?? [])}`));
 }
 
 async function openIssueModal({ client, logger, triggerId, userId, query, origin }) {
