@@ -165,7 +165,7 @@ async function draftIntoView({
       source,
       origin,
       attachments: files,
-      banner: `:sparkles: *Alpie drafted this ${draft.template.name} issue.* Check each field, fill in anything left blank, then create it.`,
+      banner: `:sparkles: *Alpie drafted this ${draft.template.name} issue*, including its own suggestions where you didn't say (like steps to reproduce). Check each field, fill in anything left blank, then create it.`,
     });
   } catch (err) {
     if (!(err instanceof AlpieError)) logger.error(err);
@@ -850,6 +850,6 @@ await repos.start();
 await app.start();
 console.log(
   `Alpieca running (${config.slack.socketMode ? 'Socket Mode' : `HTTP on :${config.slack.port}`}), filing into ` +
-    repos.list.map((r) => `${r.repo}${r.public ? '' : ' (private)'}`).join(' and ') +
+    repos.describe() +
     (alpie ? `, drafting with ${config.alpie.model}${config.alpie.thinking ? ' (reasoning on)' : ''}` : ', Alpie drafting off (no ALPIE_BASE_URL or ALPIE_API_KEY)'),
 );

@@ -83,9 +83,9 @@ test('no matching template is an AlpieError (falls back to the picker)', () => {
   assert.throws(() => parseDraft('I think this is a bug report.', templates, { feedback: 'x' }), /valid JSON/);
 });
 
-test('client posts to chat/completions and retries once on non-JSON', async () => {
+test('client picks the template, then drafts, and retries once on non-JSON', async () => {
   const calls = [];
-  const replies = ['Sure! Here is the issue.', reply(GOOD)];
+  const replies = [JSON.stringify({ template_id: alpie.id }), 'Sure! Here is the issue.', reply(GOOD)];
   const fetchImpl = async (url, init) => {
     calls.push({ url, init: { ...init, body: JSON.parse(init.body) } });
     return new Response(JSON.stringify({ choices: [{ message: { content: replies.shift() } }] }), { status: 200 });
@@ -93,18 +93,23 @@ test('client posts to chat/completions and retries once on non-JSON', async () =
   const client = createAlpie({ apiKey: 'k', baseUrl: 'https://api.169pi.com/v1/', model: 'alpie-32b', timeoutMs: 1000, fetchImpl });
   const draft = await client.draft({ templates, feedback: FEEDBACK });
   assert.equal(draft.template, alpie);
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 3);
   assert.equal(calls[0].url, 'https://api.169pi.com/v1/chat/completions');
   assert.equal(calls[0].init.headers.Authorization, 'Bearer k');
   assert.equal(calls[0].init.body.model, 'alpie-32b');
-  assert.equal(calls[1].init.body.messages.at(-1).role, 'user');
+  // Step 2 sees only the chosen template, so its fields can't be mixed up with another's.
+  assert.match(calls[1].init.body.messages[1].content, /Use this template/);
+  assert.equal(calls[2].init.body.messages.at(-1).role, 'user');
 });
 
 test('Alpie Seed: no key means no Authorization header, and reasoning mode is off by default', async () => {
   const calls = [];
   const fetchImpl = async (url, init) => {
-    calls.push({ headers: init.headers, body: JSON.parse(init.body) });
-    return new Response(JSON.stringify({ choices: [{ message: { content: reply(GOOD) } }] }), { status: 200 });
+    const body = JSON.parse(init.body);
+    calls.push({ headers: init.headers, body });
+    const picking = !body.response_format.json_schema.schema.properties.fields;
+    const content = picking ? JSON.stringify({ template_id: alpie.id }) : reply(GOOD);
+    return new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200 });
   };
   await createAlpie({ apiKey: null, baseUrl: 'https://test.169pi.ai/v1', model: 'alpie_9b', timeoutMs: 1000, fetchImpl }).draft({
     templates,
@@ -112,19 +117,21 @@ test('Alpie Seed: no key means no Authorization header, and reasoning mode is of
   });
   assert.equal(calls[0].headers.Authorization, undefined);
   assert.deepEqual(calls[0].body.chat_template_kwargs, { enable_thinking: false });
-  const format = calls[0].body.response_format;
-  assert.equal(format.type, 'json_schema');
-  assert.equal(format.json_schema.strict, true);
-  assert.deepEqual(format.json_schema.schema.properties.template_id.enum, [...templates.map((t) => t.id), null]);
-  assert.equal(format.json_schema.schema.properties.fields.additionalProperties, false);
-  assert.equal(calls[0].body.temperature, 0.2);
+  const pick = calls[0].body.response_format;
+  assert.equal(pick.type, 'json_schema');
+  assert.equal(pick.json_schema.strict, true);
+  assert.deepEqual(pick.json_schema.schema.properties.template_id.enum, [...templates.map((t) => t.id), null]);
+  const fill = calls[1].body.response_format.json_schema.schema;
+  assert.deepEqual(fill.properties.template_id.enum, [alpie.id, null], 'drafting sees only the chosen template');
+  assert.equal(fill.properties.fields.additionalProperties, false);
+  assert.equal(calls[1].body.temperature, 0.2);
 
   await createAlpie({ apiKey: 'k', baseUrl: 'https://x', model: 'm', thinking: true, timeoutMs: 1000, fetchImpl }).draft({
     templates,
     feedback: FEEDBACK,
   });
-  assert.equal(calls[1].headers.Authorization, 'Bearer k');
-  assert.deepEqual(calls[1].body.chat_template_kwargs, { enable_thinking: true });
+  assert.equal(calls[2].headers.Authorization, 'Bearer k');
+  assert.deepEqual(calls[2].body.chat_template_kwargs, { enable_thinking: true });
 });
 
 test('config turns Alpie on with a base URL or a key, and defaults to Alpie Seed', () => {

@@ -55,7 +55,8 @@ The feedback template sits next to the main repo's templates in Slack. Picking a
 
 What's different about feedback issues:
 
-- **A template built for triage.** The *Product Feedback* template asks what engineering needs: product and area, type, what happened, what was expected, steps, who's affected, how often, severity and environment. Required answers must be filled in before filing. Alpie leaves severity and frequency blank unless the reporter said them. Edit [`feedback-templates/product-feedback.md`](feedback-templates/product-feedback.md) on `main` and the form updates within minutes, no redeploy.
+- **A template built for triage, mostly clicks.** The *Product Feedback* template asks what engineering needs: product checkboxes (iOS App, Android App, API, Playground, Alpie Chat; tick any), the area, dropdowns for type, who's affected, how often and severity, then what happened, what was expected, steps and environment. Required answers must be filled in before filing. Edit [`feedback-templates/product-feedback.md`](feedback-templates/product-feedback.md) on `main` and the form updates within minutes, no redeploy. Turn a field into a dropdown by listing its options: `* **Area (Login, Chat, Settings):**`. Add a product by adding a `- [ ] Name` line.
+- **A complete first draft.** From a line like *"the login screen of the app freezes"*, Alpie fills in the area, type and severity, describes what happened, and suggests the expected behaviour and steps to reproduce, for the reporter to check. It doesn't guess facts only the reporter knows: who's affected, how often, and the app version stay blank unless they said them. Products are ticked only if the reporter names them or a screenshot shows them, so "the app" alone leaves them for the reporter.
 - **Screenshots.** Alpie looks at up to four images from the thread and uses what they show: the product, the screen, and exact error messages.
 - **Files stay in Slack.** The form lists the thread's files, all ticked. Ticked files are linked from the issue, and only people in the Slack workspace can open them. Nothing is copied to GitHub. Files in a private channel or DM can only be opened by people in it.
 - **The team is tagged.** Issues end with `cc @169Pi/engineering` (`FEEDBACK_GITHUB_MENTION`). GitHub can't assign issues to a team, so people take them with **Assign to me**. Set `FEEDBACK_SLACK_MENTION` to a Slack user group ID to tag the team in the thread too.
@@ -87,7 +88,7 @@ To check, open any issue in the repo, type `@169Pi/eng` in a comment box, and se
 
 **3. A `feedback` label.** In the repo, *Issues → Labels → New label* → `feedback`. Without it GitHub drops the label, and the card says so.
 
-**4. Turn it on.** On the bot's server, set `FEEDBACK_REPO=169Pi/<repo>` and `FEEDBACK_GITHUB_TOKEN`, optionally `FEEDBACK_SLACK_MENTION`, and restart. Paste the updated [`manifest.yml`](manifest.yml) into the Slack app and **Reinstall to Workspace**, which adds the `files:read` scope Alpieca needs to read screenshots. The startup log lists both repos, with `(private)` after the feedback repo.
+**4. Turn it on.** Set `FEEDBACK_REPO=169Pi/<repo>` and `FEEDBACK_GITHUB_TOKEN`, optionally `FEEDBACK_SLACK_MENTION`, wherever the bot gets its settings (Parameter Store on 169Pi's server, see [Hosting](#hosting)), and restart. Paste the updated [`manifest.yml`](manifest.yml) into the Slack app and **Reinstall to Workspace**, which adds the `files:read` scope Alpieca needs to read screenshots. The startup log lists both repos, with `(private)` after the feedback repo. If it says `(no access: …)` instead, the token can't read the repo: check its repository access, and whether the org still has to approve it.
 
 ## How templates become forms
 
@@ -98,6 +99,8 @@ Alpieca works with GitHub's Markdown issue templates as they are. No extra confi
 | `title: "[Project]: <…>"` | A **Title** field. The issue is titled `[Project]: <what you typed>`. |
 | `### Heading` followed by `*italic guidance*` | A multi-line box, with the guidance shown as a hint. |
 | `* **Field:**` bullets under a heading | One single-line input per bullet. |
+| `* **Field (A, B, C):**` | A dropdown with options A, B and C. The issue still reads `Field (A, B, C): B`. |
+| A heading followed only by `- [ ] A`, `- [ ] B` task items | Checkboxes: tick any number. The issue shows them as a GitHub task list with the picks ticked. |
 | `(Optional)` or `(if applicable)` in a heading or bullet | An optional input. Everything else is required. |
 | A bullet named like *Repo*, *Link*, *Demo*, *Docs* or *URL* | Must contain an `https://` link. |
 | A bullet named like *Author*, *Owner* or *Mastermind* | Pre-filled with the reporter's Slack name. |
@@ -117,7 +120,9 @@ The bot doesn't take Alpie's output on trust:
 - **Links:** any link that wasn't in the original conversation is removed, so made-up URLs never reach GitHub. Answers can only link to real issues, the repo, or the conversation.
 - **Instructions inside messages:** Slack content is passed to Alpie as data, so instructions written in a message are ignored.
 - **Invented reasons:** the prompt tells Alpie not to make up reasons or pitches that nobody gave.
-- **Guessed ratings:** severity and frequency answers are dropped unless the reporter used those words.
+- **Guessed facts:** who's affected, how often and version answers are dropped unless the reporter used those words; product ticks and platform unless they named them or sent a screenshot. Dropdown and checkbox answers must be among the options.
+- **Emails from screenshots:** email addresses the reporter didn't type (such as a signed-in user's, read off a screenshot) are removed from drafts.
+- **Two steps:** with several templates, Alpie first picks one, then drafts against only that template's fields, so answers can't land in the wrong box.
 - **Stuck replies:** drafts must match a JSON schema. A reply that gets stuck is cut off and retried.
 - **Failures:** if Alpie fails or times out, the reporter falls back to the normal form, and their original text is kept.
 
@@ -220,6 +225,13 @@ docker run -d --name alpieca --restart unless-stopped --env-file .env -v alpieca
 ```
 
 **systemd on a Linux server:** see [`deploy/alpieca.service`](deploy/alpieca.service). The setup steps are in its header comment, and secrets go in `/etc/alpieca.env` with mode `600`. View logs with `journalctl -u alpieca -f`. To update, run `git pull && npm ci --omit=dev`, then `systemctl restart alpieca`.
+
+**AWS EC2 with Parameter Store (how 169Pi runs it):** the same systemd unit, but `ExecStart` runs [`deploy/alpieca-start`](deploy/alpieca-start), which loads every parameter under `/alpieca/` as a setting. There is no env file.
+- **To add or change a setting,** create or edit `/alpieca/<NAME>` in *Systems Manager → Parameter Store*, in the instance's region. Use **SecureString**, with the same KMS key as the other secrets, for tokens. Then `sudo systemctl restart alpieca`.
+- **To update the code,** `sudo -u alpieca git -C /opt/alpieca pull origin main`. Run `npm ci --omit=dev` in `slack-bot/` only if `package-lock.json` changed. Then restart.
+- **To list the settings** without their values: `aws ssm get-parameters-by-path --path /alpieca/ --query 'Parameters[].Name' --output text`.
+
+**Checking a deploy:** the last log line on startup says what's live, e.g. `Alpieca running (Socket Mode), filing into 169Pi/devrel and 169Pi/app-alpie (private), drafting with alpie_9b`. A repo shown as `(no access: …)` means its token can't read it, so filing there will fail. You can also ask the bot "which model are you?" in Slack.
 
 ## Development
 

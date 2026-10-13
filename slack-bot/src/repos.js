@@ -32,6 +32,8 @@ export function createRepos(destinations, { token, ttlMs, logger = console, make
       templates: createTemplateStore(async () => qualify(await load(), d.repo), { ttlMs, logger }),
       // Assume public until GitHub says otherwise, so reporters are warned when in doubt.
       public: true,
+      // Why the token couldn't read the repo, if it couldn't. Guests are kept out of such repos.
+      accessError: null,
       labels: { at: 0, list: [] },
     };
   });
@@ -49,7 +51,8 @@ export function createRepos(destinations, { token, ttlMs, logger = console, make
 
     /** Templates from every repo the person may file into. A repo that fails to load is skipped. */
     async templates({ guest = false } = {}) {
-      const usable = list.filter((r) => !(guest && !r.public));
+      // Guests only get repos known to be public.
+      const usable = list.filter((r) => !(guest && (!r.public || r.accessError)));
       const loaded = await Promise.all(
         usable.map((r) =>
           r.templates.all().catch((err) => {
@@ -77,11 +80,20 @@ export function createRepos(destinations, { token, ttlMs, logger = console, make
       return r.labels.list;
     },
 
+    /** How each repo looks from here, for the startup log: "owner/repo (private)", "owner/repo (no access: …)". */
+    describe() {
+      return list.map((r) => `${r.repo}${r.accessError ? ` (no access: ${r.accessError})` : r.public ? '' : ' (private)'}`).join(' and ');
+    },
+
     /** Loads templates and checks visibility. The main repo must work; the others may fail and retry later. */
     async start() {
       await Promise.all(
         list.map(async (r) => {
-          r.public = await r.github.isPublic().catch(() => true);
+          r.public = await r.github.isPublic().catch((err) => {
+            r.accessError = err.status === 404 || err.status === 403 ? 'token has no access' : err.status === 401 ? 'token rejected' : err.message;
+            logger.warn(`Can't read ${r.repo} with its GitHub token (${r.accessError}). Filing issues there will fail.`);
+            return true;
+          });
           await r.templates.refresh().catch((err) => {
             if (r.main) throw err;
             logger.warn(`Couldn't load templates from ${r.repo} yet: ${err.message}`);

@@ -16,6 +16,20 @@ const ITALIC = /^(?:\*(?![*\s])(.+?)\*|_(?![_\s])(.+?)_)$/;
 const OPTIONAL = /\b(optional|if applicable)\b/i;
 const OPTIONAL_SUFFIX = /\s*\((?:optional|if applicable)\)\s*/gi;
 const URL_FIELD = /\b(links?|repo|url|demo|docs?)\b/i;
+// "- [ ] iOS App" task-list items -> checkboxes; a section of them is a pick-any-number question.
+const CHOICE = /^\s*[*-]\s+\[[ xX]\]\s+(.+?)\s*$/;
+// "Severity (Blocker, Major, Minor)" -> a dropdown. Needs a comma, so "Mastermind(s)" stays text.
+const OPTION_LIST = /\s*\(([^()]*,[^()]*)\)\s*$/;
+const MAX_OPTIONS = 100;
+
+/** Splits "Severity (Blocker, Major, Minor)" into the label and its options. */
+function labelAndOptions(rawLabel) {
+  const label = plain(rawLabel);
+  const match = label.match(OPTION_LIST);
+  if (!match) return { label, options: null };
+  const options = [...new Set(match[1].split(',').map((o) => o.trim()).filter(Boolean))].slice(0, MAX_OPTIONS);
+  return options.length > 1 ? { label: label.replace(OPTION_LIST, '').trim(), options } : { label, options: null };
+}
 
 export function isTemplateFile(name) {
   return /\.md$/i.test(name);
@@ -48,7 +62,7 @@ export function parseTemplate(id, source) {
   for (const line of match[2].split(/\r?\n/)) {
     const heading = line.match(HEADING);
     if (heading) {
-      current = { level: heading[1].length, heading: heading[2], guidance: [], fields: [] };
+      current = { level: heading[1].length, heading: heading[2], guidance: [], fields: [], choices: [] };
       sections.push(current);
       continue;
     }
@@ -56,6 +70,11 @@ export function parseTemplate(id, source) {
     const field = line.match(BULLET_FIELD);
     if (field) {
       current.fields.push({ rawLabel: field[1].trim() });
+      continue;
+    }
+    const choice = line.match(CHOICE);
+    if (choice) {
+      current.choices.push(choice[1]);
       continue;
     }
     const italic = line.trim().match(ITALIC);
@@ -83,10 +102,12 @@ export function parseTemplate(id, source) {
         title: plain(section.heading),
         guidance: section.guidance.join(' '),
         optional: sectionOptional,
+        // Checkboxes (pick any), when the section is a task list rather than bullets or free text.
+        choices: !section.fields.length && section.choices.length ? [...new Set(section.choices)] : null,
         fields: section.fields.map((field, j) => ({
           id: `s${i}f${j}`,
           rawLabel: field.rawLabel,
-          label: plain(field.rawLabel),
+          ...labelAndOptions(field.rawLabel),
           optional: sectionOptional || OPTIONAL.test(field.rawLabel),
           url: URL_FIELD.test(field.rawLabel),
         })),
@@ -178,7 +199,12 @@ export function renderIssue(template, answers, { reporter, githubLogin, drafted 
       );
       return [heading, ...lines].join('\n');
     }
-    return `${heading}\n${(answers[section.id] ?? '').trim() || NO_RESPONSE}`;
+    if (section.choices) {
+      // Written back as a GitHub task list, so the issue shows which boxes were ticked.
+      const picked = new Set(Array.isArray(answers[section.id]) ? answers[section.id] : []);
+      return [heading, ...section.choices.map((c) => `- [${picked.has(c) ? 'x' : ' '}] ${c}`)].join('\n');
+    }
+    return `${heading}\n${String(answers[section.id] ?? '').trim() || NO_RESPONSE}`;
   });
   if (files.length) {
     parts.push(`### 📎 Screenshots and recordings\n_In Slack. Open them with your Slack account._\n${files.map(fileLine).join('\n')}`);

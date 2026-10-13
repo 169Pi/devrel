@@ -35,6 +35,13 @@ function input(blockId, label, element, { optional = false, hint } = {}) {
 
 const notice = (markdown) => ({ type: 'context', elements: [{ type: 'mrkdwn', text: markdown }] });
 
+/** A dropdown of a field's options, with `selected` picked if it's one of them. */
+function selectFor(options, selected) {
+  const choices = options.map((o) => ({ text: text(truncate(o, OPTION_TEXT_MAX)), value: o.slice(0, 150) }));
+  const initial = choices.find((c) => c.value.toLowerCase() === String(selected ?? '').trim().toLowerCase());
+  return { type: 'static_select', placeholder: text('Choose one'), options: choices, ...(initial ? { initial_option: initial } : {}) };
+}
+
 const repoLink = (repo) => `*<https://github.com/${repo}|${repo}>*`;
 
 /** @param repos the owner/repo names templates come from */
@@ -151,6 +158,18 @@ export function formView(
   );
 
   for (const section of template.sections) {
+    if (section.choices) {
+      const options = section.choices.slice(0, MAX_CHECKBOXES).map((c) => ({ text: text(truncate(c, OPTION_TEXT_MAX)), value: c.slice(0, 150) }));
+      const picked = new Set(Array.isArray(initial[section.id]) ? initial[section.id] : []);
+      const initialOptions = options.filter((o) => picked.has(o.value));
+      blocks.push(
+        input(section.id, section.title, { type: 'checkboxes', options, ...(initialOptions.length ? { initial_options: initialOptions } : {}) }, {
+          optional: section.optional,
+          hint: section.guidance,
+        }),
+      );
+      continue;
+    }
     if (!section.fields.length) {
       blocks.push(
         input(
@@ -172,6 +191,10 @@ export function formView(
       blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: section.guidance }] });
     }
     for (const field of section.fields) {
+      if (field.options) {
+        blocks.push(input(field.id, field.label, selectFor(field.options, initial[field.id]), { optional: field.optional }));
+        continue;
+      }
       const element = { type: 'plain_text_input' };
       if (field.url) element.placeholder = text('https://…');
       const value = initial[field.id] || (AUTHOR_FIELD.test(field.label) ? authorName : '');
