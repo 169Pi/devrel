@@ -3,6 +3,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { AlpieError, buildDraftMessages, createAlpie, parseDraft } from '../src/alpie.js';
+import { loadConfig } from '../src/config.js';
 import { EXTRA_CONTEXT, formView } from '../src/modal.js';
 import { slackToPlain, threadTranscript } from '../src/slack-text.js';
 import { loadLocalTemplates, renderIssue } from '../src/templates.js';
@@ -70,6 +71,13 @@ test('fenced JSON and missing fields are handled', () => {
   assert.equal(draft.additionalContext, '');
 });
 
+test('a stray bracket copied from the template title is dropped', () => {
+  const draft = parseDraft(reply({ ...GOOD, title: '[Project]: Alpie Pager ]' }), templates, { feedback: FEEDBACK });
+  assert.equal(draft.answers.title, 'Alpie Pager');
+  const kept = parseDraft(reply({ ...GOOD, title: 'Support [beta] flags' }), templates, { feedback: FEEDBACK });
+  assert.equal(kept.answers.title, 'Support [beta] flags');
+});
+
 test('no matching template is an AlpieError (falls back to the picker)', () => {
   assert.throws(() => parseDraft(reply({ template_id: null, fields: {} }), templates, { feedback: 'x' }), AlpieError);
   assert.throws(() => parseDraft('I think this is a bug report.', templates, { feedback: 'x' }), /valid JSON/);
@@ -90,6 +98,40 @@ test('client posts to chat/completions and retries once on non-JSON', async () =
   assert.equal(calls[0].init.headers.Authorization, 'Bearer k');
   assert.equal(calls[0].init.body.model, 'alpie-32b');
   assert.equal(calls[1].init.body.messages.at(-1).role, 'user');
+});
+
+test('Alpie Seed: no key means no Authorization header, and reasoning mode is off by default', async () => {
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    calls.push({ headers: init.headers, body: JSON.parse(init.body) });
+    return new Response(JSON.stringify({ choices: [{ message: { content: reply(GOOD) } }] }), { status: 200 });
+  };
+  await createAlpie({ apiKey: null, baseUrl: 'https://test.169pi.ai/v1', model: 'alpie_9b', timeoutMs: 1000, fetchImpl }).draft({
+    templates,
+    feedback: FEEDBACK,
+  });
+  assert.equal(calls[0].headers.Authorization, undefined);
+  assert.deepEqual(calls[0].body.chat_template_kwargs, { enable_thinking: false });
+  assert.deepEqual(calls[0].body.response_format, { type: 'json_object' });
+  assert.equal(calls[0].body.temperature, 0.2);
+
+  await createAlpie({ apiKey: 'k', baseUrl: 'https://x', model: 'm', thinking: true, timeoutMs: 1000, fetchImpl }).draft({
+    templates,
+    feedback: FEEDBACK,
+  });
+  assert.equal(calls[1].headers.Authorization, 'Bearer k');
+  assert.deepEqual(calls[1].body.chat_template_kwargs, { enable_thinking: true });
+});
+
+test('config turns Alpie on with a base URL or a key, and defaults to Alpie Seed', () => {
+  const base = { SLACK_BOT_TOKEN: 'x', SLACK_APP_TOKEN: 'x', GITHUB_TOKEN: 'x' };
+  assert.equal(loadConfig(base).alpie, null);
+  const seed = loadConfig({ ...base, ALPIE_BASE_URL: 'https://test.169pi.ai/v1' }).alpie;
+  assert.deepEqual(seed, { apiKey: null, baseUrl: 'https://test.169pi.ai/v1', model: 'alpie_9b', thinking: false, timeoutMs: 60_000 });
+  const keyed = loadConfig({ ...base, ALPIE_API_KEY: 'k', ALPIE_THINKING: 'true' }).alpie;
+  assert.equal(keyed.apiKey, 'k');
+  assert.equal(keyed.baseUrl, 'https://test.169pi.ai/v1');
+  assert.equal(keyed.thinking, true);
 });
 
 test('API errors surface the backend message', async () => {

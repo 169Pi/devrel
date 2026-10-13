@@ -6,10 +6,14 @@ import { createProgress, fractionDone, llamaTrack, startTicker, statusLine } fro
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** A fake Alpie that streams `content` as server-sent events, a few characters at a time. */
-function streamingFetch(content, { chunk = 7 } = {}) {
+function streamingFetch(content, { chunk = 7, reasoning = '' } = {}) {
   return async (url, init) => {
     assert.equal(JSON.parse(init.body).stream, true);
     const events = [];
+    // Reasoning in its own field first, as vLLM sends it for Alpie Seed in reasoning mode.
+    for (let i = 0; i < reasoning.length; i += chunk) {
+      events.push(`data: ${JSON.stringify({ choices: [{ delta: { reasoning: reasoning.slice(i, i + chunk) } }] })}\n\n`);
+    }
     for (let i = 0; i < content.length; i += chunk) {
       events.push(`data: ${JSON.stringify({ choices: [{ delta: { content: content.slice(i, i + chunk) } }] })}\n\n`);
     }
@@ -33,7 +37,7 @@ test('the llama walks along the track and never claims 100% early', () => {
   const p = createProgress();
   assert.equal(fractionDone(p), 0.02);
   assert.equal(fractionDone({ ...p, phase: 'writing', chars: 99_999 }), 0.95);
-  assert.ok(fractionDone({ ...p, phase: 'thinking', chars: 600 }) < fractionDone({ ...p, phase: 'writing', chars: 1400 }));
+  assert.ok(fractionDone({ ...p, phase: 'thinking', chars: 150 }) < fractionDone({ ...p, phase: 'writing', chars: 350 }));
 });
 
 test('status line shows a spinner frame, the stage, the track and elapsed seconds', () => {
@@ -49,6 +53,30 @@ test('progressOf splits reasoning from output at </think>', () => {
   assert.deepEqual(progressOf('Hmm.\n</think>\n\nYes, #7'), { phase: 'writing', chars: 22, output: 'Yes, #7' });
 });
 
+test('with reasoning off, everything streamed is output', () => {
+  assert.deepEqual(progressOf('{"title"', { thinking: false }), { phase: 'writing', chars: 8, output: '{"title"' });
+  // A model that reasons anyway is still split at </think>.
+  assert.equal(progressOf('Hmm.</think>Yes', { thinking: false }).output, 'Yes');
+});
+
+test('reasoning sent in its own field shows as thinking, then the output parses', async () => {
+  const content = JSON.stringify({ template_id: 'm.md', title: 'Neon hoodie', fields: { s0: 'Hoodie' }, additional_context: '' });
+  const seen = [];
+  const alpie = createAlpie({
+    baseUrl: 'https://x',
+    model: 'alpie_9b',
+    thinking: true,
+    timeoutMs: 5000,
+    fetchImpl: streamingFetch(content, { reasoning: 'Thinking about the hoodie for a while…' }),
+  });
+  const template = { id: 'm.md', titlePrefix: '', sections: [{ id: 's0', fields: [] }] };
+  const draft = await alpie.draft({ templates: [template], feedback: 'hoodie', onProgress: (p) => seen.push({ ...p }) });
+  assert.equal(draft.answers.s0, 'Hoodie');
+  assert.equal(seen[0].phase, 'thinking');
+  assert.equal(seen.at(-1).phase, 'writing');
+  assert.equal(seen.at(-1).output, content);
+});
+
 test('drafts stream with progress updates and still parse', async () => {
   const content = `Reasoning about the hoodie at length…\n</think>\n\n${JSON.stringify({
     template_id: 'm.md',
@@ -57,7 +85,7 @@ test('drafts stream with progress updates and still parse', async () => {
     additional_context: '',
   })}`;
   const seen = [];
-  const alpie = createAlpie({ apiKey: 'k', baseUrl: 'https://x', model: 'm', timeoutMs: 5000, fetchImpl: streamingFetch(content) });
+  const alpie = createAlpie({ apiKey: 'k', baseUrl: 'https://x', model: 'm', thinking: true, timeoutMs: 5000, fetchImpl: streamingFetch(content) });
   const template = { id: 'm.md', titlePrefix: '', sections: [{ id: 's0', fields: [] }] };
   const draft = await alpie.draft({ templates: [template], feedback: 'hoodie', onProgress: (p) => seen.push({ ...p }) });
   assert.equal(draft.answers.s0, 'Hoodie');
@@ -71,7 +99,7 @@ test('drafts stream with progress updates and still parse', async () => {
 test('streamed answers are filtered for invented links while still partial', async () => {
   const content = 'Thinking.\n</think>\nSee https://fake.example/x and https://github.com/169Pi/devrel/issues/7 for more.';
   const partials = [];
-  const alpie = createAlpie({ apiKey: 'k', baseUrl: 'https://x', model: 'm', timeoutMs: 5000, fetchImpl: streamingFetch(content, { chunk: 4 }) });
+  const alpie = createAlpie({ apiKey: 'k', baseUrl: 'https://x', model: 'm', thinking: true, timeoutMs: 5000, fetchImpl: streamingFetch(content, { chunk: 4 }) });
   const reply = await alpie.answer({
     repo: '169Pi/devrel',
     conversation: 'any issues?',

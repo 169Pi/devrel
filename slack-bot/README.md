@@ -1,6 +1,6 @@
 # Alpieca 🦙
 
-**Slack ↔ GitHub, the woolly way.** Alpieca is the Slack app [169Pi](https://github.com/169Pi) uses to turn conversations into well-formed GitHub issues. People describe a bug or an idea in Slack, or point at a thread. [Alpie](https://huggingface.co/169Pi/Alpie-Core) drafts the issue from the repo's own issue templates, a human reviews it, and the issue lands in GitHub. Issues opened directly on GitHub show up in Slack too, with buttons to triage them.
+**Slack ↔ GitHub, the woolly way.** Alpieca is the Slack app [169Pi](https://github.com/169Pi) uses to turn conversations into well-formed GitHub issues. People describe a bug or an idea in Slack, or point at a thread. [Alpie Seed](https://huggingface.co/169Pi) drafts the issue from the repo's own issue templates, a human reviews it, and the issue lands in GitHub. Issues opened directly on GitHub show up in Slack too, with buttons to triage them.
 
 It's built to be forked. Everything specific to us (the repo, the templates, the command name) is configuration, so you can run the same setup for your own project and Slack workspace.
 
@@ -64,9 +64,9 @@ The issue is written back in the template's exact layout (same headings, bullets
 
 ## Drafting with Alpie
 
-Alpie is optional. Without an API key, Alpieca still works, with plain forms.
+Alpie is optional. Without `ALPIE_BASE_URL` or `ALPIE_API_KEY`, Alpieca still works, with plain forms.
 
-With a key, Alpie gets the template's fields and the feedback (free text or a Slack thread). It picks a template if none was chosen, fills in what the feedback supports, and adds an **Additional context** section: who else was involved, constraints that were mentioned, and open questions for a maintainer. **Nothing is filed until a person reviews the draft and clicks *Create issue*.**
+With Alpie set up, it gets the template's fields and the feedback (free text or a Slack thread). It picks a template if none was chosen, fills in what the feedback supports, and adds an **Additional context** section: who else was involved, constraints that were mentioned, and open questions for a maintainer. **Nothing is filed until a person reviews the draft and clicks *Create issue*.**
 
 The bot doesn't take Alpie's output on trust:
 
@@ -76,11 +76,11 @@ The bot doesn't take Alpie's output on trust:
 - **Invented reasons:** the prompt tells Alpie not to make up reasons or pitches that nobody gave.
 - **Failures:** if Alpie fails or times out, the reporter falls back to the normal form, and their original text is kept.
 
-**Speed.** Alpie is a reasoning model, so a draft or answer takes about 10–20 seconds. Alpieca hides most of that wait in two ways:
+**Speed.** Alpieca uses Alpie Seed 9B with reasoning mode off, so most drafts and answers arrive in a few seconds. Reasoning mode (`ALPIE_THINKING=true`) can take 10–20 seconds and isn't usually needed to fill in a template. Alpieca hides the wait in two ways:
 - **Drafting ahead:** when an @mention or DM sounds like something to raise, drafting starts immediately, before anyone clicks.
 - **Live loading animation:** Alpie's output is streamed, so the form and the answer message show the current stage, a 🦙 moving along a progress track, and elapsed seconds. Answers fill in as they're written.
 
-**Other models.** The Alpie client speaks the OpenAI-style `/chat/completions` API, with optional streaming. Point `ALPIE_BASE_URL` and `ALPIE_MODEL` at another compatible endpoint if you prefer. It handles reasoning models that think out loud before `</think>`, as well as models that don't.
+**Other models.** The Alpie client speaks the OpenAI-style `/chat/completions` API, with optional streaming. Point `ALPIE_BASE_URL` and `ALPIE_MODEL` at another compatible endpoint if you prefer. It handles reasoning models that think out loud before `</think>` or send reasoning in a separate field, as well as models that don't. Set `ALPIE_THINKING=true` for a model that always reasons, so the loading animation shows the right stage.
 
 ## Access and privacy
 
@@ -117,7 +117,7 @@ Create a [fine-grained personal access token](https://github.com/settings/person
 Issues are opened as the token's owner, so a dedicated bot account keeps things tidy. If the repo belongs to an organization, an org owner may need to approve the token. Until they do, it can read but not write.
 
 ### 3. Alpie (optional)
-Create a key at [playground.169pi.ai](https://playground.169pi.ai/dashboard/api-keys) → `ALPIE_API_KEY`.
+Set `ALPIE_BASE_URL=https://test.169pi.ai/v1` to use the hosted Alpie Seed 9B endpoint, which needs no key. For an endpoint that requires a key, also set `ALPIE_API_KEY`.
 
 ### 4. Run it locally
 ```bash
@@ -144,8 +144,8 @@ Invite the bot to that channel. Set the bot's `SLACK_NOTIFY_CHANNEL` to the same
 | `GITHUB_TOKEN` | yes | Fine-grained token with Issues read/write and Contents read. |
 | `GITHUB_REPO` | | `owner/repo` to file into. Defaults to `169Pi/devrel`. |
 | `GITHUB_TEMPLATE_REF` | | Branch to read templates from. Defaults to the default branch. |
-| `ALPIE_API_KEY` | | Turns on drafting and answers. |
-| `ALPIE_BASE_URL`, `ALPIE_MODEL`, `ALPIE_TIMEOUT_SECONDS` | | Defaults: `https://api.169pi.com/v1`, `alpie-32b`, `90`. |
+| `ALPIE_BASE_URL`, `ALPIE_API_KEY` | | Setting either turns on drafting and answers. The URL defaults to `https://test.169pi.ai/v1`; the key is only sent if set. |
+| `ALPIE_MODEL`, `ALPIE_THINKING`, `ALPIE_TIMEOUT_SECONDS` | | Defaults: `alpie_9b`, `false`, `60`. |
 | `SLACK_COMMAND` | | Defaults to `/alpieca`. Must match the manifest. |
 | `SLACK_NOTIFY_CHANNEL` | | Channel ID that also gets every new issue card. |
 | `SLACK_TRIAGE_USERS` | | Comma-separated Slack user IDs allowed to triage. Defaults to all full members. |
