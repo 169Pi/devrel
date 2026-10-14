@@ -21,6 +21,15 @@ const EMAIL = /[\w.+-]+@[\w-]+(\.[\w-]+)+/g;
 // Things a screenshot can show (an iPhone status bar, a browser window), but that can't be guessed
 // from words alone: Alpie answered "All platforms" for every text-only report.
 const SEEN_OR_STATED = /\b(platform|device|browser|os)\b/i;
+// Layout bugs (an overlapping input box) came back "Major" every time. Without words for something
+// actually broken, or the reporter calling it serious, they're Minor at most.
+const LOOKS_ONLY = /\b(overlap\w*|overflow\w*|clipped|cut off|truncat\w*|misalign\w*|alignment|spacing|padding|margin|font|colou?rs?|typo|layout|wrap\w*|covers?|covering|hidden behind|too (big|small|tall|wide)|(?:grow\w*|grew) (?:over|past|beyond))\b/i;
+const BROKEN = /\b(crash\w*|freez\w*|frozen|hang\w*|stuck|errors?|fail\w*|broken|can'?t|cannot|unable|won'?t|lost|loses|blank|timeouts?|timed out|doesn'?t (work|load|open|send|respond|save)|not (working|loading|sending))\b/i;
+const CALLED_SERIOUS = /\b(blocker|blocking|critical|urgent|major|severe|serious|showstopper)\b/i;
+// What a ticked product says about the device: the iOS App runs on iOS.
+const PRODUCT_OS = { ios: 'iOS', android: 'Android' };
+const PLATFORM_WORDS = { ios: /\b(ios|iphone|ipad)\b/i, android: /\b(android|pixel|galaxy)\b/i };
+const GENERIC_TITLE = /^(?:(?:app|ui|ux|ios|android)\s+)?(?:bug|issue|problem|feedback|glitch|error)s?$/i;
 
 function schemaFor(template) {
   const fields = {};
@@ -63,14 +72,22 @@ Rules:
 - Fields with "options" take exactly one of those options, copied word for word, or "". Fields that also have pick_any_number take every option that applies, comma-separated in one string (e.g. "iOS App, API"), or "".
 - Fields marked only_if_stated (who is affected, how often) must be "" unless the feedback says so. Only the reporter knows these.
 
-Problem reports (something broken, frozen, slow, confusing or missing; usually the product feedback template): make a complete first draft, even from one line, so the reporter only has to check it.
-- Work out the area or screen and type from the words and screenshots. A screen or feature ("Login screen") goes in the area field.
-- Products: tick every product the reporter names or a screenshot clearly shows (an iPhone status bar means the iOS App). If they only say "the app", tick none; don't guess the platform.
-- Platform, if the template asks: only if the reporter says it or a screenshot clearly shows it; otherwise "". Never guess "All platforms".
-- "What happened": describe the problem clearly in a sentence or two, from what was said and shown.
-- "What did you expect": write the obvious expected behaviour, without naming screens or features nobody mentioned, e.g. "The login screen responds and signs the user in."
-- "Steps to reproduce": write the likely steps as a short numbered list, from opening the app to the problem, e.g. "1. Open the app\n2. Go to the login screen\n3. Enter email and password and tap Log in\n4. The screen freezes". Keep them generic; no made-up data.
-- Severity: pick the option that fits the impact described. Something that stops people using a core flow (like logging in) is a Blocker.
+Reading screenshots (when there are images, do this before writing anything):
+- Platform and device: an iPhone status bar (time top-left, signal and battery top-right, a notch or Dynamic Island pill, a home bar at the bottom) means iPhone and iOS; an Android status bar (icons on the left, back/home buttons or a gesture bar) means Android; a browser window (tabs, address bar) means the web.
+- Screen: which screen or view it is (chat window, settings, login), from its header, layout and controls.
+- The problem: which UI elements are involved and what goes wrong between them: overlapping, cut off, overflowing their space, misaligned, missing, an error message (quote it), a spinner that never ends. Name both elements when one covers another, e.g. "the keyboard covers the Save button".
+- The trigger, if the image shows it: long text, an empty state, a small screen, a particular input.
+- Write what you see in "seen" as 1-3 plain sentences, then use it in the title, fields and context.
+
+Problem reports (something broken, frozen, slow, confusing, badly laid out or missing; usually the product feedback template): make a complete first draft, even from one line, so the reporter only has to check it.
+- "title": "<Product> <screen or area>: <what goes wrong>", e.g. "Android App settings: Save button hidden behind the keyboard" or "Playground: API key field rejects pasted keys". Always name the product and the screen when the feedback or a screenshot shows them. Never a generic title like "Bug", "UI issue" or "App problem".
+- Work out the area or screen and type from the words and screenshots. A screen or feature ("Chat window", "Login screen") goes in the area field.
+- Products: tick every product the reporter names or a screenshot clearly shows (an iPhone status bar means the iOS App). If they only say "the app" and there's no screenshot, tick none; don't guess the platform.
+- Platform, device or OS, if the template asks: write it as "Device: iPhone · OS: iOS", even when it seems obvious. Only from the reporter's words or what a screenshot clearly shows; otherwise "". Never guess "All platforms".
+- "What happened": two or three sentences: which element does what wrong, what it collides with or hides, and what triggers it, from what was said and shown. E.g. "When the keyboard opens on the settings screen, it covers the Save button, so changes can't be saved without closing it first."
+- "What did you expect": write the obvious expected behaviour, without naming screens or features nobody mentioned, e.g. "The screen scrolls so the Save button stays visible above the keyboard."
+- "Steps to reproduce": a short numbered list from opening the app to the problem, including the input that triggers it, e.g. "1. Open the Android app\n2. Go to Settings\n3. Tap the display name field so the keyboard opens\n4. See the Save button hidden behind it". When the trigger is input (long text, many items, a large file), say so in a step, like "Type a long message so the box grows past its space". Keep them generic; no made-up data.
+- Severity: Blocker = people can't use a core flow at all (can't log in, app crashes). Major = a feature is broken or gives wrong results, with no workaround. Minor = it works but is awkward or partly hidden, or has a workaround. Cosmetic = only how it looks: layout, overlap, alignment, spacing, colours, typos. Layout and overlap problems are Minor or Cosmetic unless they stop people using the feature. Don't default to Major.
 
 Ideas and pitches (merch, showcase and other suggestions):
 - Don't add benefits, opinions, reasons or descriptive flourishes that nobody said. Prefer the reporter's own words. If the feedback doesn't explain why, leave that field "" rather than making up a reason.
@@ -81,11 +98,11 @@ For every draft:
 - Copy links exactly as written. Only put links in link fields.
 - Write clearly and concisely, keeping the reporter's intent and tone. Light Markdown is fine in multi-line fields; single_line fields must be one line.
 - "title" is a short summary WITHOUT the template's title_prefix.
-- "additional_context" holds 2-5 Markdown bullets that help a maintainer act on the issue but don't fit the template: who else was involved, constraints or deadlines mentioned, disagreements in the thread, and open questions or missing details the maintainer should ask about. Don't repeat the template answers, don't say who reported it (the issue already does), and skip incidental screenshot details like the time, battery or network. Use "" if there's nothing useful.
+- "additional_context" holds 2-5 Markdown bullets that help a maintainer act on the issue but don't fit the template: what the screenshots show that the fields don't (the screen state, the exact text involved), who else was involved, constraints or deadlines mentioned, disagreements in the thread, and open questions the maintainer should ask (app version, other devices or screen sizes, whether it started recently). For problem reports, always write at least one bullet. Don't repeat the template answers, don't say who reported it (the issue already does), and skip incidental screenshot details like the time, battery or network.
 - Leave out secrets, credentials, customer names and personal contact details, including emails or names visible in screenshots; the issue may be public.
 
 Reply with exactly one JSON object and nothing else:
-{"title": "...", "template_id": "<id or null if none fits>", "fields": {"<field id>": "..."}, "additional_context": "..."}`;
+{"seen": "<what the screenshots show, or \\"\\">", "title": "...", "template_id": "<id or null if none fits>", "fields": {"<field id>": "..."}, "additional_context": "..."}`;
 
 /**
  * The JSON schema a draft must match, enforced by the server (vLLM structured outputs). Without it
@@ -122,10 +139,13 @@ export function draftSchema(templates) {
     const [bs, bf = -1] = position(b);
     return as - bs || af - bf;
   });
-  // Title first: starting with template_id made Alpie Seed get stuck (see RUNAWAY) far more often.
+  // "seen" first, so Alpie describes the screenshots before it writes anything that depends on them
+  // (with reasoning off, it otherwise skimmed them). Then the title: starting with template_id made
+  // Alpie Seed get stuck (see RUNAWAY) far more often.
   return {
     type: 'object',
     properties: {
+      seen: { type: 'string' },
       title: { type: 'string' },
       template_id: { type: ['string', 'null'], enum: [...templates.map((t) => t.id), null] },
       fields: {
@@ -137,7 +157,7 @@ export function draftSchema(templates) {
       },
       additional_context: { type: 'string' },
     },
-    required: ['template_id', 'title', 'fields', 'additional_context'],
+    required: ['seen', 'template_id', 'title', 'fields', 'additional_context'],
     additionalProperties: false,
   };
 }
@@ -228,7 +248,11 @@ export function parseDraft(content, templates, { feedback, hasImages = false }) 
   // ("Customers" ~ "a customer", "v2.3.1" ~ "on v2.3.1").
   const tokens = (text) => (text.toLowerCase().match(/[a-z]+|[0-9]+/g) ?? []).map((t) => t.replace(/(?<=[a-z]{2})s$/, ''));
   const said = new Set(tokens(feedback));
-  const stated = (value) => tokens(value).every((t) => said.has(t));
+  // Words from the field's own label don't count as facts: "Device: iPhone · OS: iOS" only needs "iPhone" and "iOS".
+  const stated = (value, label = '') => {
+    const labelled = new Set(tokens(label));
+    return tokens(value).every((t) => said.has(t) || labelled.has(t));
+  };
   // Dropdown answers must be one of the options; "major" becomes "Major".
   const pick = (options, value) => {
     const v = value.toLowerCase();
@@ -269,7 +293,7 @@ export function parseDraft(content, templates, { feedback, hasImages = false }) 
       let value = scrub(oneLine(str(fields[field.id])));
       if (field.options) value = pick(field.options, value);
       const needsWords = STATED_ONLY.test(field.label) || (!hasImages && SEEN_OR_STATED.test(field.label));
-      const ok = linksAreReal(value) && (!field.url || /https?:\/\//.test(value)) && (!needsWords || stated(value));
+      const ok = linksAreReal(value) && (!field.url || /https?:\/\//.test(value)) && (!needsWords || stated(value, field.label));
       answers[field.id] = ok ? clip(value, SINGLE_LINE_MAX) : '';
     }
     // The same answer in two text fields of a section (Product and Area both "Login screen") means
@@ -280,12 +304,94 @@ export function parseDraft(content, templates, { feedback, hasImages = false }) 
     }
   }
 
+  // What Alpie said the screenshots show; only used for problem reports.
+  const seen = hasImages ? scrub(oneLine(str(raw.seen))) : '';
+  const shown = linksAreReal(seen) ? seen : '';
   const context = str(raw.additional_context);
-  return {
-    template,
-    answers,
-    additionalContext: linksAreReal(context) ? clip(scrub(context), TEXTAREA_MAX) : '',
+  let additionalContext = linksAreReal(context) ? clip(scrub(context), TEXTAREA_MAX) : '';
+  if (isProblemReport(template)) {
+    checkProblemReport(template, answers, { feedback, seen: shown, tokens });
+    // What Alpie wrote, or what it saw if it wrote nothing, plus what the maintainer should still ask.
+    const lines = [asBullets(additionalContext) || (shown && `- The screenshot shows: ${shown}`), toConfirm(template, answers)];
+    additionalContext = clip(lines.filter(Boolean).join('\n'), TEXTAREA_MAX);
+  }
+  return { template, answers, additionalContext };
+}
+
+const allFields = (template) => template.sections.flatMap((s) => s.fields);
+const fieldLike = (template, re) => allFields(template).find((f) => re.test(f.label));
+const productSection = (template) => template.sections.find((s) => s.choices && /\bproducts?\b/i.test(s.title));
+/** Templates for things that are broken (they ask how severe it is), as opposed to ideas and pitches. */
+const isProblemReport = (template) => Boolean(fieldLike(template, /\bseverity\b/i)?.options);
+const plainLabel = (label) => label.replace(/[^\p{L}\p{N}' ]+/gu, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+
+/**
+ * Fixes what a small model gets wrong on bug reports, whatever the screenshot: titles that don't say
+ * which product, layout glitches rated Major, and an empty device when the product already says it.
+ */
+function checkProblemReport(template, answers, { feedback, seen, tokens }) {
+  const products = productSection(template);
+  const area = fieldLike(template, /\b(area|screen)\b/i);
+  const happened = template.sections.find((s) => !s.fields.length && !s.choices && /\bhappen/i.test(s.title));
+  const device = allFields(template).find((f) => !f.options && SEEN_OR_STATED.test(f.label) && !STATED_ONLY.test(f.label));
+  const has = (text, phrase) => {
+    const words = new Set(tokens(text));
+    return tokens(phrase).filter((t) => !FILLER.has(t)).every((t) => words.has(t));
   };
+  const osOf = (product) => product.toLowerCase().split(/\W+/).find((w) => PRODUCT_OS[w]);
+
+  // Products and device agree: an iPhone in the device field ticks the iOS App (Alpie sometimes
+  // ticked only the feature it saw), and a ticked iOS App fills in a blank device as iOS.
+  const ticked = products ? answers[products.id] : [];
+  const deviceText = device ? answers[device.id] : '';
+  for (const choice of products?.choices ?? []) {
+    const os = osOf(choice);
+    if (os && !ticked.includes(choice) && PLATFORM_WORDS[os].test(deviceText)) ticked.unshift(choice);
+  }
+  if (device && !deviceText) {
+    const systems = [...new Set(ticked.map(osOf).filter(Boolean).map((os) => PRODUCT_OS[os]))];
+    if (systems.length) answers[device.id] = `OS: ${systems.join(', ')}`;
+  }
+
+  // Title: "<Product> <area>: <problem>", led by the platform app when there is one. Generic titles
+  // are rebuilt from what happened; others get the product added.
+  let title = answers.title;
+  const lead = ticked.find(osOf) ?? ticked[0];
+  const where = area ? answers[area.id] : '';
+  if (!title || GENERIC_TITLE.test(title)) {
+    const first = (happened ? answers[happened.id] : '').split(/(?<=[.!?])\s/)[0].replace(/[.!?]$/, '');
+    if (first) title = first;
+  }
+  if (lead && title && !has(title, lead)) {
+    const [, head, rest] = title.match(/^([^:]{1,60}):\s*(.+)$/) ?? [];
+    if (head && ticked.some((p) => has(head, p))) title = `${lead} ${head}: ${rest}`;
+    else if (where && !tokens(where).some((t) => tokens(title).includes(t))) title = `${lead} ${where}: ${title}`;
+    else title = `${lead}: ${title}`;
+  }
+  answers.title = clip(title ?? '', 256 - template.titlePrefix.length);
+
+  // Severity: looks-only problems aren't Major unless the reporter said it's serious.
+  const severity = fieldLike(template, /\bseverity\b/i);
+  if (severity && ['Blocker', 'Major'].includes(answers[severity.id]) && severity.options.includes('Minor')) {
+    const described = [feedback, seen, answers.title, happened ? answers[happened.id] : ''].join('\n');
+    if (LOOKS_ONLY.test(described) && !BROKEN.test(described) && !CALLED_SERIOUS.test(feedback)) answers[severity.id] = 'Minor';
+  }
+}
+
+/** Alpie sometimes writes the context as a paragraph; make every line a bullet. */
+const asBullets = (text) =>
+  text
+    .split('\n')
+    .map((line) => (!line.trim() || /^\s*(?:[-*]|\d+\.)\s/.test(line) ? line : `- ${line.trim()}`))
+    .join('\n');
+
+/** Facts only the reporter knows that are still blank, as a bullet for the maintainer to follow up on. */
+function toConfirm(template, answers) {
+  const unknown = [
+    ...template.sections.filter((s) => s.choices && STATED_ONLY.test(s.title) && !answers[s.id]?.length).map((s) => s.title),
+    ...allFields(template).filter((f) => STATED_ONLY.test(f.label) && !answers[f.id]).map((f) => f.label),
+  ].map(plainLabel);
+  return unknown.length ? `- Still to confirm with the reporter: ${unknown.join(', ')}.` : '';
 }
 
 const ANSWER_PROMPT = `You are Alpieca 🦙, 169Pi's Slack assistant for the GitHub {repos}. You run on 169Pi's {model} model. If asked which model you are, say exactly that. People @mention you or DM you with questions, or with bugs, ideas and requests they want to raise as GitHub issues.

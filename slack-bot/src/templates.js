@@ -188,8 +188,10 @@ function fileLine({ name, permalink, mimetype = '' }) {
  *
  * @param files    files shared in Slack, linked from the issue: [{ name, permalink, mimetype }]
  * @param mention  a GitHub @user or @org/team to notify, e.g. "@169Pi/engineering"
+ * @param reporter, githubLogin  who raised it: their Slack name and GitHub username (if known)
+ * @param filedBy  { name, login } of whoever filed it for the reporter, if that's someone else
  */
-export function renderIssue(template, answers, { reporter, githubLogin, drafted = false, source, files = [], mention } = {}) {
+export function renderIssue(template, answers, { reporter, githubLogin, filedBy, drafted = false, source, files = [], mention } = {}) {
   const summary = stripPrefix(template.titlePrefix, (answers.title ?? '').trim());
   const parts = template.sections.map((section) => {
     const heading = `${'#'.repeat(section.level)} ${section.heading}`;
@@ -212,10 +214,11 @@ export function renderIssue(template, answers, { reporter, githubLogin, drafted 
   const extra = (answers.extra_context ?? '').trim();
   if (extra) parts.push(`### ${drafted ? '🤖 ' : ''}Additional context\n${extra}`);
   if (mention) parts.push(`cc ${mention}`);
-  const who = reporter?.replace(/[<>@]/g, '').trim();
+  const person = (name, login) => [name?.replace(/[<>@]/g, '').trim(), login && `(@${login})`].filter(Boolean).join(' ');
   const footer = [
     // @login notifies and subscribes the real reporter; the issue itself is opened by the bot's token.
-    (who || githubLogin) && `Raised from Slack by ${[who, githubLogin && `(@${githubLogin})`].filter(Boolean).join(' ')}`,
+    (reporter || githubLogin) && `Raised from Slack by ${person(reporter, githubLogin)}`,
+    filedBy && `filed by ${person(filedBy.name, filedBy.login)}`,
     drafted && 'drafted with Alpie',
     source && `[source thread](${source})`,
   ].filter(Boolean);

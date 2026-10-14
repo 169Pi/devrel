@@ -61,3 +61,14 @@ export function looksLikeIssue(text) {
   const t = String(text ?? '');
   return STRONG_ISSUE.test(t) || (SOFT_ISSUE.test(t) && !QUESTION.test(t));
 }
+
+/**
+ * Who raised what's being filed: the selected message's author, or whoever started the thread when
+ * that message is only an @mention ("@Alpieca" under someone's bug report). Never a bot.
+ */
+export function raiserOf(messages, ts) {
+  const person = (m) => (m?.user && !m.bot_id ? m.user : null);
+  const selected = messages.find((m) => m.ts === ts);
+  const bareMention = selected && !selected.files?.length && /^\s*(?:<@\w+>\s*)*$/.test(selected.text ?? '');
+  return (bareMention ? person(messages[0]) : null) ?? person(selected) ?? person(messages[0]);
+}

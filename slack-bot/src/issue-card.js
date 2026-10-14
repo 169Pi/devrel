@@ -90,7 +90,9 @@ export function issueCard(issue, { repo, headline, note } = {}) {
   const open = issue.state === 'open';
   const labels = (issue.labels ?? []).map((l) => (typeof l === 'string' ? l : l.name)).filter(Boolean);
   const assignees = (issue.assignees ?? []).map((a) => a.login);
-  const reporter = reporterFromBody(issue.body) ?? issue.user?.login;
+  // Issues filed from Slack are opened by the bot's token, so issue.user is the token's owner, not
+  // the reporter. Without a reporter in the marker they're credited to no one rather than to them.
+  const reporter = reporterFromBody(issue.body) ?? (isFromSlack(issue.body) ? null : issue.user?.login);
   const state = open ? ':large_green_circle: Open' : issue.state_reason === 'not_planned' ? ':white_circle: Closed (not planned)' : ':large_purple_circle: Resolved';
 
   const meta = [
