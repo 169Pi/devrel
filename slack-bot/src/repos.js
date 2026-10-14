@@ -82,7 +82,9 @@ export function createRepos(destinations, { token, ttlMs, logger = console, make
 
     /** How each repo looks from here, for the startup log: "owner/repo (private)", "owner/repo (no access: …)". */
     describe() {
-      return list.map((r) => `${r.repo}${r.accessError ? ` (no access: ${r.accessError})` : r.public ? '' : ' (private)'}`).join(' and ');
+      const access = (r) => (r.accessError ? ` (no access: ${r.accessError})` : r.public ? '' : ' (private)');
+      // GitHub shows the token's owner as every issue's author, so say who that is.
+      return list.map((r) => `${r.repo}${access(r)}${r.owner ? ` as @${r.owner}` : ''}`).join(' and ');
     },
 
     /** Loads templates and checks visibility. The main repo must work; the others may fail and retry later. */
@@ -94,6 +96,7 @@ export function createRepos(destinations, { token, ttlMs, logger = console, make
             logger.warn(`Can't read ${r.repo} with its GitHub token (${r.accessError}). Filing issues there will fail.`);
             return true;
           });
+          r.owner = await r.github.tokenOwner?.();
           await r.templates.refresh().catch((err) => {
             if (r.main) throw err;
             logger.warn(`Couldn't load templates from ${r.repo} yet: ${err.message}`);

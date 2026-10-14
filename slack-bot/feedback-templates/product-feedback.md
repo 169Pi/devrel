@@ -45,4 +45,5 @@ assignees: ''
 * **Severity (Blocker, Major, Minor, Cosmetic):** 
 
 ### 💻 Environment (optional)
-* **App version or device:** 
+* **Device and OS:** 
+* **App version:** 

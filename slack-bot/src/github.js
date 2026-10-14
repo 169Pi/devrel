@@ -34,6 +34,15 @@ export function createGitHub({ token, repo, ref, logger = console }) {
       return parseTemplates(entries, logger);
     },
 
+    /** The account issues are opened as: the token's owner. Null for tokens that can't say (GitHub App tokens). */
+    async tokenOwner() {
+      try {
+        return (await octokit.users.getAuthenticated()).data.login;
+      } catch {
+        return null;
+      }
+    },
+
     async isPublic() {
       const { data } = await octokit.repos.get({ owner, repo: name });
       return !data.private;

@@ -11,7 +11,7 @@ It's built to be forked. Everything specific to us (the repo, the templates, the
 - **Product feedback, with screenshots.** Point Alpieca at a thread, or DM it a screenshot, and it drafts a structured feedback issue in a private product repo. Alpie reads the screenshots, the issue links to the files in Slack, and engineering is tagged. See [Product feedback](#product-feedback).
 - **Ask it things.** DM Alpieca or @mention it with a question ("are there any merch ideas filed already?"). Alpie answers from the templates and recent issues.
 - **Issue cards with triage buttons.** Every new issue, whether filed from Slack or opened on GitHub, appears in Slack as a card with **Assign to me**, **Label**, **Comment** and **Mark resolved/Reopen**.
-- **Credit for the reporter.** Issues @mention the reporter's GitHub account, not just the bot's.
+- **Credit for the reporter.** Issues credit whoever raised it in Slack, even when a teammate files it for them, and @mention their GitHub account. See [Who an issue is credited to](#who-an-issue-is-credited-to).
 
 ```mermaid
 flowchart LR
@@ -34,12 +34,16 @@ flowchart LR
 | `/alpieca` | Pick a template, then fill in the form generated from it. |
 | `/alpieca merch` | Jump straight to a template by name. |
 | `/alpieca <describe the issue>` | Alpie picks the template and drafts the issue for you to review. |
-| **More actions → Turn into GitHub issue** on a message | Alpie drafts an issue from that message and its whole thread. |
-| `@Alpieca` in a channel or thread, or a DM | Something to raise gets a private *Review Alpie's draft* button; a question gets an answer in the thread. A bare `@Alpieca` in a thread means "turn this thread into an issue". A DM with just a screenshot or recording counts as something to raise. |
+| **More actions → Turn into GitHub issue** on a message | Alpie drafts an issue from that message and its whole thread, and posts the draft in its thread. In a channel Alpieca isn't in, it opens the form instead. |
+| `@Alpieca` in a channel or thread, or a DM | Something to raise gets a draft posted in the thread, with **Review and file** and **Pick another template** buttons for anyone there; a question gets an answer in the thread. A bare `@Alpieca` in a thread means "turn this thread into an issue". A DM with just a screenshot or recording counts as something to raise. |
 | `/alpieca github <username>` | Link your GitHub account (you're also asked the first time you file). |
 | `/alpieca help` | Lists the templates and these options. |
 
-After an issue is created, Alpieca posts its **card** where you raised it: the channel, the thread, or your DM. It also posts to a team channel if you've configured one.
+### Drafts in the thread
+
+When you @mention Alpieca about something to raise, or use *Turn into GitHub issue* on a message, it replies in the thread, where everyone can see it. The reply shows Alpie drafting, then the draft's title, tagged for whoever raised it. The rest of the draft stays in the form until someone opens it. Anyone in the thread can click **Review and file** to open the full form, and closing the form loses nothing: the draft stays in the thread, and the button reopens the same draft for up to a day (after that, or after a restart, it drafts again). **Pick another template** redrafts the thread against a template you choose. If Alpie fails, the message offers **Try again**.
+
+When someone files it, the draft message turns into the issue's **card**, so the thread has one message per issue and the same draft can't be filed twice. Issues filed another way post their card where you raised them: the channel, the thread, or your DM. Every card also goes to a team channel if you've configured one.
 
 ### Issue cards and triage
 
@@ -55,9 +59,9 @@ The feedback template sits next to the main repo's templates in Slack. Picking a
 
 What's different about feedback issues:
 
-- **A template built for triage, mostly clicks.** The *Product Feedback* template asks what engineering needs: product checkboxes (iOS App, Android App, API, Playground, Alpie Chat; tick any), the area, a radio choice of type, what happened, what was expected, steps, who's affected (checkboxes), radio choices of how often and severity, and environment. Required answers must be filled in before filing. Edit [`feedback-templates/product-feedback.md`](feedback-templates/product-feedback.md) on `main` and the form updates within minutes, no redeploy. Turn a field into radio buttons by listing its options: `* **Area (Login, Chat, Settings):**`. Add a product by adding a `- [ ] Name` line.
-- **A complete first draft.** From a line like *"the login screen of the app freezes"*, Alpie fills in the area, type and severity, describes what happened, and suggests the expected behaviour and steps to reproduce, for the reporter to check. It doesn't guess facts only the reporter knows: who's affected, how often, and the app version stay blank unless they said them. Products are ticked only if the reporter names them or a screenshot shows them, so "the app" alone leaves them for the reporter.
-- **Screenshots.** Alpie looks at up to four images from the thread and uses what they show: the product, the screen, and exact error messages.
+- **A template built for triage, mostly clicks.** The *Product Feedback* template asks what engineering needs: product checkboxes (iOS App, Android App, API, Playground, Alpie Chat; tick any), the area, a radio choice of type, what happened, what was expected, steps, who's affected (checkboxes), radio choices of how often and severity, and the device, OS and app version. Required answers must be filled in before filing. Edit [`feedback-templates/product-feedback.md`](feedback-templates/product-feedback.md) on `main` and the form updates within minutes, no redeploy. Turn a field into radio buttons by listing its options: `* **Area (Login, Chat, Settings):**`. Add a product by adding a `- [ ] Name` line.
+- **A complete first draft.** From a line like *"the login screen of the app freezes"*, Alpie fills in the area, type and severity, describes what happened, and suggests the expected behaviour and steps to reproduce (including the input that triggers it), for the reporter to check. Titles lead with the product and screen, e.g. *iOS App Chat window: Long prompt overflows the input box and overlaps the greeting*. Layout and overlap problems are rated Minor or Cosmetic, not Major, unless something is broken or the reporter says it's serious. *Additional context* always ends with what's still to confirm with the reporter. It doesn't guess facts only the reporter knows: who's affected, how often, and the app version stay blank unless they said them. Products are ticked only if the reporter names them or a screenshot shows them, so "the app" alone leaves them for the reporter.
+- **Screenshots.** Alpie looks at up to four images from the thread and first writes down what they show: the platform and device (an iPhone status bar means iPhone and iOS), the screen, which UI elements go wrong and how (one covering another, cut off, an error message, quoted exactly), and what triggers it. The draft is built from that. The device field and the product ticks are kept consistent: an iPhone ticks the iOS App, and a ticked iOS App fills in iOS.
 - **Files stay in Slack.** The form lists the thread's files, all ticked. Ticked files are linked from the issue, and only people in the Slack workspace can open them. Nothing is copied to GitHub. Files in a private channel or DM can only be opened by people in it.
 - **The team is tagged.** Issues end with `cc @169Pi/engineering` (`FEEDBACK_GITHUB_MENTION`). GitHub can't assign issues to a team, so people take them with **Assign to me**. Set `FEEDBACK_SLACK_MENTION` to a Slack user group ID to tag the team in the thread too.
 - **The card goes back to the thread** it came from, with **View on GitHub**, **Assign to me**, **Comment** and **Mark resolved**.
@@ -108,6 +112,12 @@ Alpieca works with GitHub's Markdown issue templates as they are. No extra confi
 
 The issue is written back in the template's exact layout (same headings, bullets and prefix), so it looks the same as one opened from GitHub's **New issue** page. Unanswered optional fields read `_No response_`.
 
+## Who an issue is credited to
+
+The **reporter** is whoever raised it in Slack: the author of the message used with *Turn into GitHub issue*, the person who started the thread when someone replies with a bare `@Alpieca`, or the person who DMed or @mentioned Alpieca with their own words. When a teammate files it for them, the form says so, and the issue footer reads *Raised from Slack by Priya (@priya) · filed by Vishal (@vishal)*. The card's headline and its *by @…* credit the reporter, using the GitHub account they linked with `/alpieca github <username>`. If they haven't linked one, the card names no GitHub account rather than the bot's.
+
+GitHub itself always shows the **token's owner** as an issue's author, because the bot creates issues with one token. If that token belongs to a person, every issue looks like it was opened by them. Create the tokens from a dedicated bot account (for example `169pi-bot`, a member of the org) instead. The startup log names the account each repo's issues are opened as, e.g. `169Pi/devrel as @169pi-bot`.
+
 ## Drafting with Alpie
 
 Alpie is optional. Without `ALPIE_BASE_URL` or `ALPIE_API_KEY`, Alpieca still works, with plain forms.
@@ -120,14 +130,14 @@ The bot doesn't take Alpie's output on trust:
 - **Links:** any link that wasn't in the original conversation is removed, so made-up URLs never reach GitHub. Answers can only link to real issues, the repo, or the conversation.
 - **Instructions inside messages:** Slack content is passed to Alpie as data, so instructions written in a message are ignored.
 - **Invented reasons:** the prompt tells Alpie not to make up reasons or pitches that nobody gave.
-- **Guessed facts:** who's affected, how often and version answers are dropped unless the reporter used those words; product ticks and platform unless they named them or sent a screenshot. Dropdown and checkbox answers must be among the options.
+- **Guessed facts:** who's affected, how often and version answers are dropped unless the reporter used those words; product ticks, platform and device unless they named them or sent a screenshot. Dropdown and checkbox answers must be among the options.
 - **Emails from screenshots:** email addresses the reporter didn't type (such as a signed-in user's, read off a screenshot) are removed from drafts.
 - **Two steps:** with several templates, Alpie first picks one, then drafts against only that template's fields, so answers can't land in the wrong box.
 - **Stuck replies:** drafts must match a JSON schema. A reply that gets stuck is cut off and retried.
 - **Failures:** if Alpie fails or times out, the reporter falls back to the normal form, and their original text is kept.
 
 **Speed.** Alpieca uses Alpie Seed 9B with reasoning mode off, so most drafts and answers arrive in a few seconds. Reasoning mode (`ALPIE_THINKING=true`) can take 10–20 seconds and isn't usually needed to fill in a template. Alpieca hides the wait in two ways:
-- **Drafting ahead:** when an @mention or DM sounds like something to raise, drafting starts immediately, before anyone clicks.
+- **Drafting ahead:** when an @mention or DM sounds like something to raise, drafting starts immediately and the draft is posted in the thread, before anyone clicks.
 - **Live loading animation:** Alpie's output is streamed, so the form and the answer message show the current stage, a 🦙 moving along a progress track, and elapsed seconds. Answers fill in as they're written.
 
 **Other models.** The Alpie client speaks the OpenAI-style `/chat/completions` API, with optional streaming. Point `ALPIE_BASE_URL` and `ALPIE_MODEL` at another compatible endpoint if you prefer. It handles reasoning models that think out loud before `</think>` or send reasoning in a separate field, as well as models that don't. Set `ALPIE_THINKING=true` for a model that always reasons, so the loading animation shows the right stage.
@@ -167,7 +177,7 @@ Create a [fine-grained personal access token](https://github.com/settings/person
 - **Issues:** Read and write
 - **Contents:** Read-only
 
-Issues are opened as the token's owner, so a dedicated bot account keeps things tidy. If the repo belongs to an organization, an org owner may need to approve the token. Until they do, it can read but not write.
+Issues are opened as the token's owner, so create the token from a dedicated bot account. A personal token makes every issue look like that person opened it (see [Who an issue is credited to](#who-an-issue-is-credited-to)). If the repo belongs to an organization, an org owner may need to approve the token. Until they do, it can read but not write.
 
 ### 3. Alpie (optional)
 Set `ALPIE_BASE_URL=https://test.169pi.ai/v1` to use the hosted Alpie Seed 9B endpoint, which needs no key. For an endpoint that requires a key, also set `ALPIE_API_KEY`.
@@ -231,7 +241,7 @@ docker run -d --name alpieca --restart unless-stopped --env-file .env -v alpieca
 - **To update the code,** `sudo -u alpieca git -C /opt/alpieca pull origin main`. Run `npm ci --omit=dev` in `slack-bot/` only if `package-lock.json` changed. Then restart.
 - **To list the settings** without their values: `aws ssm get-parameters-by-path --path /alpieca/ --query 'Parameters[].Name' --output text`.
 
-**Checking a deploy:** the last log line on startup says what's live, e.g. `Alpieca running (Socket Mode), filing into 169Pi/devrel and 169Pi/app-alpie (private), drafting with alpie_9b`. A repo shown as `(no access: …)` means its token can't read it, so filing there will fail. You can also ask the bot "which model are you?" in Slack.
+**Checking a deploy:** the last log line on startup says what's live, e.g. `Alpieca running (Socket Mode), filing into 169Pi/devrel as @169pi-bot and 169Pi/app-alpie (private) as @169pi-bot, drafting with alpie_9b`. The `as @…` account is the author GitHub shows on every issue. A repo shown as `(no access: …)` means its token can't read it, so filing there will fail. You can also ask the bot "which model are you?" in Slack.
 
 ## Development
 

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { buildAnswerMessages, createAlpie, keepKnownLinks, parseDraft, stripReasoning } from '../src/alpie.js';
-import { looksLikeIssue, markdownToMrkdwn } from '../src/slack-text.js';
+import { looksLikeIssue, markdownToMrkdwn, raiserOf } from '../src/slack-text.js';
 
 // What Alpie actually sends: plain-text reasoning closed by </think>, with no opening tag.
 const REAL_SHAPE = `Alright, let's tackle this. The schema is {"template_id": ...} and I'll pick merch.
@@ -110,4 +110,16 @@ test('only workspace members can use Alpieca, and only full members can triage',
   assert.equal(isPublicChannel({ is_im: true }), false);
   assert.equal(isPublicChannel({ is_mpim: true, is_private: true }), false);
   assert.equal(isPublicChannel(null), false, 'unknown channels are treated as private');
+});
+
+test('issues are credited to whoever raised them, not whoever clicked', () => {
+  const root = { ts: '1', user: 'UPRIYA', text: 'the chat box overlaps the greeting' };
+  const mention = { ts: '2', user: 'UVISHAL', text: '<@UBOT>' };
+  const reply = { ts: '3', user: 'UVISHAL', text: 'same on my phone' };
+  const shot = { ts: '4', user: 'UASHA', text: '<@UBOT>', files: [{ id: 'F1' }] };
+  assert.equal(raiserOf([root, mention], '2'), 'UPRIYA', 'a bare @mention under a report');
+  assert.equal(raiserOf([root, reply], '3'), 'UVISHAL', 'the selected message has its own words');
+  assert.equal(raiserOf([root, reply], '1'), 'UPRIYA');
+  assert.equal(raiserOf([root, shot], '4'), 'UASHA', 'a screenshot is something raised');
+  assert.equal(raiserOf([{ ts: '1', bot_id: 'B1', text: 'alert' }, mention], '2'), 'UVISHAL', 'never a bot');
 });

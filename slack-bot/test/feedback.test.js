@@ -175,7 +175,8 @@ test('the feedback template asks the triage questions', () => {
     ['Type', false, ['Bug', 'UX problem', 'Feature request', 'Praise']],
     ['How often', false, ['Every time', 'Sometimes', 'Once']],
     ['Severity', false, ['Blocker', 'Major', 'Minor', 'Cosmetic']],
-    ['App version or device', true, null],
+    ['Device and OS', true, null],
+    ['App version', true, null],
   ]);
   assert.ok(feedbackTemplate.sections.find((s) => s.title.startsWith('🔁')).optional);
 });
@@ -284,7 +285,7 @@ test('the draft schema pins checkboxes and dropdowns to their options, and needs
 test("Alpie gets the options, and is told not to guess who's affected or how often", () => {
   const [system, user] = buildDraftMessages({ templates: [feedbackTemplate], feedback: 'x' });
   const fields = Object.values(JSON.parse(user.content.match(/\[[\s\S]*\]/)[0])[0].fields);
-  assert.deepEqual(fields.filter((f) => f.only_if_stated).map((f) => f.label), ['👥 Who is affected?', 'How often', 'App version or device']);
+  assert.deepEqual(fields.filter((f) => f.only_if_stated).map((f) => f.label), ['👥 Who is affected?', 'How often', 'App version']);
   assert.deepEqual(fields.find((f) => f.label === 'Severity').options, ['Blocker', 'Major', 'Minor', 'Cosmetic']);
   assert.equal(fields.find((f) => f.label === 'Severity').single_line, undefined);
   assert.equal(fields.find((f) => f.label === 'Area or screen').single_line, true);
@@ -293,8 +294,10 @@ test("Alpie gets the options, and is told not to guess who's affected or how oft
   assert.deepEqual(products.options, ['iOS App', 'Android App', 'API', 'Playground', 'Alpie Chat']);
   // Problem reports get a full draft; pitches keep the no-invention rules.
   assert.match(system.content, /Problem reports .* make a complete first draft/);
-  assert.match(system.content, /"Steps to reproduce": write the likely steps/);
-  assert.match(system.content, /If they only say "the app", tick none/);
+  assert.match(system.content, /"Steps to reproduce": a short numbered list .* including the input that triggers it/);
+  assert.match(system.content, /Layout and overlap problems are Minor or Cosmetic/);
+  assert.match(system.content, /"title": "<Product> <screen or area>: <what goes wrong>"/);
+  assert.match(system.content, /If they only say "the app" and there's no screenshot, tick none/);
   assert.match(system.content, /Ideas and pitches[\s\S]*Never write persuasive/);
 });
 
@@ -342,22 +345,23 @@ test("versions need the reporter's words, and emails Alpie read off a screenshot
     JSON.stringify({
       title: 'Login freezes for vishal@example.com',
       template_id: feedbackTemplate.id,
-      fields: { [ids['App version or device']]: 'iOS 17.4.1', [happened]: 'Stuck on Signing in for vishal@example.com; ask help@169pi.ai' },
+      fields: { [ids['App version']]: '17.4.1', [happened]: 'Stuck on Signing in for vishal@example.com; ask help@169pi.ai' },
       additional_context: '- User email is vishal@example.com',
     }),
     [feedbackTemplate],
     { feedback: 'login is frozen, see screenshot. ping help@169pi.ai' },
   );
-  assert.equal(draft.answers[ids['App version or device']], '', 'version not typed');
+  assert.equal(draft.answers[ids['App version']], '', 'version not typed');
   assert.equal(draft.answers[happened], 'Stuck on Signing in for [email removed]; ask help@169pi.ai', 'typed emails stay');
   assert.equal(draft.answers.title, 'Login freezes for [email removed]');
-  assert.equal(draft.additionalContext, '- User email is [email removed]');
+  assert.match(draft.additionalContext, /^- User email is \[email removed\]\n/);
   const typed = parseDraft(
-    JSON.stringify({ title: 't', template_id: feedbackTemplate.id, fields: { [ids['App version or device']]: 'v2.3.1 on Pixel 8' }, additional_context: '' }),
+    JSON.stringify({ title: 't', template_id: feedbackTemplate.id, fields: { [ids['App version']]: 'v2.3.1', [ids['Device and OS']]: 'Device: Pixel 8 · OS: Android' }, additional_context: '' }),
     [feedbackTemplate],
-    { feedback: 'frozen on v2.3.1, my Pixel 8' },
+    { feedback: 'frozen on v2.3.1, my Pixel 8 android' },
   );
-  assert.equal(typed.answers[ids['App version or device']], 'v2.3.1 on Pixel 8');
+  assert.equal(typed.answers[ids['App version']], 'v2.3.1');
+  assert.equal(typed.answers[ids['Device and OS']], 'Device: Pixel 8 · OS: Android', 'the label\'s own words don\'t need saying');
 });
 
 test('platform fields are kept from screenshots or words, never from a guess', () => {
@@ -465,3 +469,115 @@ test('ticked files are read back as file ids', () => {
   const none = readAnswers({ state: { values: { [ATTACHMENTS_BLOCK]: { value: { type: 'checkboxes', selected_options: [] } } } } });
   assert.deepEqual(none[ATTACHMENTS_BLOCK], []);
 });
+
+/** A feedback-template reply from Alpie, with the given field answers by label. */
+const feedbackReply = ({ title = 't', seen = '', context = '', ...byLabel }) =>
+  JSON.stringify({
+    seen,
+    title,
+    template_id: feedbackTemplate.id,
+    fields: Object.fromEntries(Object.entries(byLabel).map(([label, v]) => [ids[label] ?? label, v])),
+    additional_context: context,
+  });
+const HAPPENED = feedbackTemplate.sections.find((s) => s.title.startsWith('📝')).id;
+
+test('the draft schema asks what the screenshots show before anything else', () => {
+  const schema = draftSchema([feedbackTemplate]);
+  assert.deepEqual(Object.keys(schema.properties).slice(0, 2), ['seen', 'title']);
+  assert.ok(schema.required.includes('seen'));
+});
+
+test('bug report titles name the product, and generic ones are rebuilt', () => {
+  const title = (reply, feedback = 'x') => parseDraft(reply, [feedbackTemplate], { feedback, hasImages: true }).answers.title;
+  assert.equal(
+    title(feedbackReply({ title: 'Chat box overlaps the greeting', s0: 'iOS App', 'Area or screen': 'Chat window' })),
+    'iOS App: Chat box overlaps the greeting',
+    'the area is already in the title',
+  );
+  assert.equal(
+    title(feedbackReply({ title: 'Text overlaps greeting', s0: 'iOS App', 'Area or screen': 'Chat window' })),
+    'iOS App Chat window: Text overlaps greeting',
+  );
+  assert.equal(title(feedbackReply({ title: 'iOS App chat window: long prompt overflows', s0: 'iOS App' })), 'iOS App chat window: long prompt overflows', 'already named');
+  assert.equal(
+    title(feedbackReply({ title: 'UI issue', s0: 'Playground', 'Area or screen': 'Output', [HAPPENED]: 'Run shows Error 500. Tried twice.' })),
+    'Playground Output: Run shows Error 500',
+  );
+  // Alpie led with a feature and saw an iPhone: the iOS App is ticked and leads the title.
+  const seen = parseDraft(
+    feedbackReply({ title: 'Alpie Chat: Long text breaks the chat', s0: 'Alpie Chat', 'Device and OS': 'Device: iPhone · OS: iOS' }),
+    [feedbackTemplate],
+    { feedback: 'x', hasImages: true },
+  ).answers;
+  assert.deepEqual(seen.s0, ['iOS App', 'Alpie Chat']);
+  assert.equal(seen.title, 'iOS App Alpie Chat: Long text breaks the chat');
+  // No product ticked (text only, "the app"): left as Alpie wrote it.
+  assert.equal(parseDraft(feedbackReply({ title: 'Login freezes', s0: 'iOS App' }), [feedbackTemplate], { feedback: 'the app freezes' }).answers.title, 'Login freezes');
+});
+
+test('layout problems are not Major unless something is broken or the reporter says it is serious', () => {
+  const severity = (feedback, extra = {}) =>
+    parseDraft(feedbackReply({ Severity: 'Major', ...extra }), [feedbackTemplate], { feedback, hasImages: true }).answers[ids.Severity];
+  assert.equal(severity('the chat box is overlapping the greeting when text is long'), 'Minor');
+  assert.equal(severity('see screenshot', { seen: 'The input box has grown over the greeting message.' }), 'Minor', 'from what Alpie saw');
+  assert.equal(severity('chat box overlaps the send button so I can\'t send'), 'Major', 'something is broken');
+  assert.equal(severity('this overlap is a major problem for demos'), 'Major', 'the reporter called it major');
+  assert.equal(severity('login freezes'), 'Major', 'not a layout problem');
+  assert.equal(
+    parseDraft(feedbackReply({ Severity: 'Cosmetic' }), [feedbackTemplate], { feedback: 'text overlaps' }).answers[ids.Severity],
+    'Cosmetic',
+  );
+});
+
+test('device and OS are filled in from the product, and read from screenshots', () => {
+  const answers = (reply, opts) => parseDraft(reply, [feedbackTemplate], { feedback: 'x', ...opts }).answers;
+  assert.equal(answers(feedbackReply({ s0: 'iOS App' }), { hasImages: true })[ids['Device and OS']], 'OS: iOS', 'Alpie left it blank');
+  assert.equal(answers(feedbackReply({ s0: 'iOS App', 'Device and OS': 'Device: iPhone · OS: iOS' }), { hasImages: true })[ids['Device and OS']], 'Device: iPhone · OS: iOS');
+  assert.equal(answers(feedbackReply({ s0: 'API' }), { hasImages: true })[ids['Device and OS']], '', 'no OS to infer');
+  assert.equal(answers(feedbackReply({ 'Device and OS': 'Device: iPhone · OS: iOS' }), { feedback: 'broken' })[ids['Device and OS']], '', 'guessed, no screenshot');
+});
+
+test('bug reports always get additional context: what was seen and what to ask', async () => {
+  const context = (reply, opts = {}) => parseDraft(reply, [feedbackTemplate], { feedback: 'x', hasImages: true, ...opts }).additionalContext;
+  assert.equal(
+    context(feedbackReply({ seen: 'The input box covers the greeting.' })),
+    '- The screenshot shows: The input box covers the greeting.\n- Still to confirm with the reporter: who is affected, how often, app version.',
+  );
+  assert.equal(
+    context(feedbackReply({ context: 'Happens after the update.\nOnly on small phones.' })),
+    '- Happens after the update.\n- Only on small phones.\n- Still to confirm with the reporter: who is affected, how often, app version.',
+    'prose becomes bullets',
+  );
+  assert.equal(
+    context(feedbackReply({ 'How often': 'Every time', [WHO]: 'Just me', 'App version': '2.1' }), { feedback: 'every time, just me, on 2.1' }),
+    '',
+    'nothing left to ask, nothing seen',
+  );
+  // Ideas and pitches keep the old rule: no context unless Alpie had some.
+  const merch = (await loadLocalTemplates(DEVREL_TEMPLATES, silent)).find((t) => /merch/i.test(t.name));
+  const reply = JSON.stringify({ seen: 'a mug', title: 't', template_id: merch.id, fields: {}, additional_context: '' });
+  assert.equal(parseDraft(reply, [merch], { feedback: 'x', hasImages: true }).additionalContext, '');
+});
+
+test('issues filed for someone else credit the reporter and name the filer', () => {
+  const issue = renderIssue(feedbackTemplate, { title: 'x' }, {
+    reporter: 'Priya',
+    githubLogin: 'priya-dev',
+    filedBy: { name: 'Vishal', login: 'vishal-das' },
+  });
+  assert.match(issue.body, /Raised from Slack by Priya \(@priya-dev\) · filed by Vishal \(@vishal-das\)/);
+  assert.match(issue.body, /<!-- alpieca:reporter=priya-dev -->/);
+  // A reporter with no linked GitHub account: named, and the marker credits no one.
+  const unlinked = renderIssue(feedbackTemplate, { title: 'x' }, { reporter: 'Priya', filedBy: { name: 'Vishal', login: 'vishal-das' } });
+  assert.match(unlinked.body, /Raised from Slack by Priya · filed by Vishal \(@vishal-das\)/);
+  assert.match(unlinked.body, /<!-- alpieca -->/);
+});
+
+test("cards for Slack issues never credit the bot token's owner", () => {
+  const base = { number: 3, title: 't', html_url: 'https://github.com/a/b/issues/3', state: 'open', labels: [], user: { login: 'token-owner' } };
+  const meta = (body) => JSON.stringify(issueCard({ ...base, body }, { repo: 'a/b' }));
+  assert.doesNotMatch(meta('From Slack\n<!-- alpieca -->'), /token-owner/);
+  assert.match(meta('From Slack\n<!-- alpieca:reporter=priya-dev -->'), /@priya-dev/);
+  assert.match(meta('Opened on GitHub'), /@token-owner/, 'issues opened on GitHub are by their author');
+});
+

@@ -116,6 +116,8 @@ export function pickerView(templates, { repos, alpie = false, feedback = '', war
  * @param linkFiles    whether issues in this repo link the conversation's files
  * @param attachments  files from the Slack thread: [{ id, name, size }], all ticked to start with
  * @param mention      who the issue notifies on GitHub, e.g. "@169Pi/engineering"
+ * @param raisedBy     Slack user ID of whoever raised it, when someone else is filing it for them
+ * @param offer        { channel, ts } of the thread draft message this came from; it becomes the issue's card
  */
 export function formView(
   template,
@@ -132,12 +134,18 @@ export function formView(
     linkFiles = false,
     attachments = [],
     mention,
+    raisedBy,
+    offer,
   } = {},
 ) {
   const blocks = [];
   if (banner) blocks.push(notice(banner));
+  if (raisedBy) {
+    blocks.push(notice(`:bust_in_silhouette: Raised by <@${raisedBy}>. The issue credits them as the reporter, and you as the person who filed it.`));
+  }
   if (publicRepo && (drafted || source)) {
-    blocks.push(notice(':eyes: This repo is *public*. Check the draft for anything internal before creating the issue. Your name and GitHub username will appear on it.'));
+    const names = raisedBy ? 'Their name and yours, with GitHub usernames,' : 'Your name and GitHub username';
+    blocks.push(notice(`:eyes: This repo is *public*. Check the draft for anything internal before creating the issue. ${names} will appear on it.`));
   }
   const meta = [
     template.about,
@@ -265,6 +273,8 @@ export function formView(
       ...(drafted ? { drafted } : {}),
       ...(source ? { source } : {}),
       ...(origin ? { origin } : {}),
+      ...(raisedBy ? { raisedBy } : {}),
+      ...(offer ? { offer } : {}),
     }),
     title: text(truncate(template.name, MODAL_TITLE_MAX)),
     submit: text('Create issue'),
