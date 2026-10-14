@@ -304,6 +304,11 @@ export function parseDraft(content, templates, { feedback, hasImages = false }) 
     }
   }
 
+  // Nothing at all (no title, no answers) means Alpie had nothing to go on, e.g. a bare @mention whose
+  // screenshot it couldn't see. Say so, rather than show a blank form as "drafted".
+  const answered = Object.values(answers).some((v) => (Array.isArray(v) ? v.length : v));
+  if (!answered) throw new AlpieError("Alpie couldn't find anything to draft from. Add a sentence about the problem and try again");
+
   // What Alpie said the screenshots show; only used for problem reports.
   const seen = hasImages ? scrub(oneLine(str(raw.seen))) : '';
   const shown = linksAreReal(seen) ? seen : '';

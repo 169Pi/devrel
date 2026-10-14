@@ -234,6 +234,24 @@ test('Slack downloads use the bot token and catch the missing-scope sign-in page
   await assert.rejects(downloadSlackFile({ ...file, size: 10 }, { token: 't', maxBytes: 5, fetchImpl: ok }), /larger than/);
 });
 
+test('files from a thread can be downloaded for Alpie', async () => {
+  // filesIn() once dropped the download link, so every screenshot silently failed to reach Alpie.
+  const [file] = filesIn([{ files: [{ id: 'F1', name: 'a.png', mimetype: 'image/png', size: 3, url_private_download: 'https://files.slack.com/a.png' }] }]);
+  let fetched;
+  const fetchImpl = async (url) => {
+    fetched = url;
+    return new Response('png', { headers: { 'content-type': 'image/png' } });
+  };
+  const images = await imagesForAlpie([file], (f, max) => downloadSlackFile(f, { token: 't', maxBytes: max, fetchImpl }), silent);
+  assert.equal(fetched, 'https://files.slack.com/a.png');
+  assert.deepEqual(images.map((i) => i.name), ['a.png']);
+});
+
+test('a draft with nothing in it is a failure, not a blank "drafted" form', () => {
+  const empty = JSON.stringify({ seen: '', title: '', template_id: feedbackTemplate.id, fields: {}, additional_context: '' });
+  assert.throws(() => parseDraft(empty, [feedbackTemplate], { feedback: 'Vishal: ' }), /couldn't find anything to draft from/);
+});
+
 test('only small images are shown to Alpie, at most four', async () => {
   const files = [
     ...Array.from({ length: 5 }, (_, i) => ({ id: `F${i}`, name: `s${i}.png`, mimetype: 'image/png', size: 100 })),

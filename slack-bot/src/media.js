@@ -15,6 +15,8 @@ export const slackFile = (f) => ({
   mimetype: f.mimetype || 'application/octet-stream',
   size: f.size ?? 0,
   permalink: f.permalink ?? null,
+  // Needed to show images to Alpie. Without it every download failed and Alpie never saw a screenshot.
+  download: f.url_private_download ?? f.url_private ?? null,
 });
 
 /** The files attached to a thread's messages, oldest first, without duplicates. */
@@ -42,7 +44,7 @@ export function formatBytes(bytes) {
  */
 export async function downloadSlackFile(file, { token, maxBytes, fetchImpl = globalThis.fetch }) {
   if (maxBytes && file.size > maxBytes) throw new Error(`larger than ${formatBytes(maxBytes)}`);
-  const url = file.url_private_download ?? file.url_private;
+  const url = file.download ?? file.url_private_download ?? file.url_private;
   if (!url) throw new Error("Slack didn't provide a download link");
   const res = await fetchImpl(url, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(60_000) });
   if (!res.ok) throw new Error(`Slack download failed (${res.status})`);
