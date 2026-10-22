@@ -219,3 +219,15 @@ test("Alpieca's home channel defaults to 169Pi's and can be changed or turned of
   assert.deepEqual(loadConfig({ ...base, SLACK_HOME_CHANNELS: '' }).slack.homeChannels, [], 'empty turns it off');
   assert.throws(() => loadConfig({ ...base, SLACK_HOME_CHANNELS: '#alpieca' }), /must be channel IDs/);
 });
+
+test('Good First Alpie is watched by default, and watched repos can be changed or turned off', () => {
+  const base = { SLACK_BOT_TOKEN: 'xoxb', SLACK_APP_TOKEN: 'xapp', GITHUB_TOKEN: 'g' };
+  assert.deepEqual(loadConfig(base).github.watched, [{ repo: '169Pi/.github', about: 'Good First Alpie' }]);
+  assert.deepEqual(loadConfig({ ...base, GITHUB_WATCH_REPOS: 'o/a=Program A, o/b' }).github.watched, [
+    { repo: 'o/a', about: 'Program A' },
+    { repo: 'o/b', about: null },
+  ]);
+  assert.deepEqual(loadConfig({ ...base, GITHUB_WATCH_REPOS: '' }).github.watched, [], 'empty turns it off');
+  assert.deepEqual(loadConfig({ ...base, GITHUB_WATCH_REPOS: '169Pi/devrel' }).github.watched, [], 'a repo filed into is not also watched');
+  assert.throws(() => loadConfig({ ...base, GITHUB_WATCH_REPOS: 'good first alpie' }), /owner\/repo/);
+});

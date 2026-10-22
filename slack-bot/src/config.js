@@ -24,6 +24,18 @@ export function loadConfig(env = process.env) {
   const homeChannels = (env.SLACK_HOME_CHANNELS ?? 'C0C507GN03A').split(',').map((s) => s.trim()).filter(Boolean);
   const badChannel = homeChannels.find((id) => !/^[CG][A-Z0-9]+$/.test(id));
   if (badChannel) throw new Error(`SLACK_HOME_CHANNELS must be channel IDs (C…), got "${badChannel}"`);
+  // Repos Alpieca only answers questions about, never files into: "owner/repo" or "owner/repo=What people call it".
+  // 169Pi's Good First Alpie contributions arrive as pull requests on 169Pi/.github.
+  const watched = (env.GITHUB_WATCH_REPOS ?? '169Pi/.github=Good First Alpie')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((entry) => {
+      const [name, ...about] = entry.split('=');
+      if (!REPO.test(name.trim())) throw new Error(`GITHUB_WATCH_REPOS must list owner/repo names, got "${name.trim()}"`);
+      return { repo: name.trim(), about: about.join('=').trim() || null };
+    })
+    .filter((w) => ![repo, feedbackRepo].some((r) => r?.toLowerCase() === w.repo.toLowerCase()));
   const slackMention = env.FEEDBACK_SLACK_MENTION?.trim() || null;
   if (slackMention && !/^[SUW][A-Z0-9]+$/.test(slackMention)) {
     throw new Error(`FEEDBACK_SLACK_MENTION must be a Slack user group (S…) or user (U…) ID, got "${slackMention}"`);
@@ -46,6 +58,7 @@ export function loadConfig(env = process.env) {
       token: env.GITHUB_TOKEN,
       repo,
       ref: env.GITHUB_TEMPLATE_REF || undefined,
+      watched,
     },
     // Optional second repo for product feedback, usually private. Its issues @mention a team and
     // link the screenshots and recordings shared in Slack.

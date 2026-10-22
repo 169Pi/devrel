@@ -20,11 +20,14 @@ export function createRepos(destinations, { token, ttlMs, logger = console, make
   const clients = destinations.map((d) => makeGitHub({ token: d.token || token, repo: d.repo, ref: d.ref, logger }));
   const list = destinations.map((d, i) => {
     const github = clients[i];
-    const load = d.templateDir
-      ? () => loadLocalTemplates(d.templateDir, logger)
-      : d.templatePath
-        ? () => clients[0].loadTemplates(d.templatePath)
-        : () => github.loadTemplates();
+    // Watched repos are only asked about, so they offer no templates and nothing is filed there.
+    const load = d.watchOnly
+      ? async () => []
+      : d.templateDir
+        ? () => loadLocalTemplates(d.templateDir, logger)
+        : d.templatePath
+          ? () => clients[0].loadTemplates(d.templatePath)
+          : () => github.loadTemplates();
     return {
       ...d,
       main: i === 0,
@@ -52,7 +55,7 @@ export function createRepos(destinations, { token, ttlMs, logger = console, make
     /** Templates from every repo the person may file into. A repo that fails to load is skipped. */
     async templates({ guest = false } = {}) {
       // Guests only get repos known to be public.
-      const usable = list.filter((r) => !(guest && (!r.public || r.accessError)));
+      const usable = list.filter((r) => !r.watchOnly && !(guest && (!r.public || r.accessError)));
       const loaded = await Promise.all(
         usable.map((r) =>
           r.templates.all().catch((err) => {
@@ -121,15 +124,18 @@ export function createRepos(destinations, { token, ttlMs, logger = console, make
         visibility: r.public ? 'public' : 'private',
         error: r.accessError,
         issuesOnly: Boolean(r.templateDir || r.templatePath),
+        watchOnly: Boolean(r.watchOnly),
+        about: r.about ?? null,
         main: r.main,
       }));
     },
 
     /** How each repo looks from here, for the startup log: "owner/repo (private)", "owner/repo (no access: …)". */
     describe() {
-      const access = (r) => (r.accessError ? ` (no access: ${r.accessError})` : r.public ? '' : ' (private)');
+      const access = (r) =>
+        (r.accessError ? ` (no access: ${r.accessError})` : r.public ? '' : ' (private)') + (r.watchOnly ? ' (questions only)' : '');
       // GitHub shows the token's owner as every issue's author, so say who that is.
-      return list.map((r) => `${r.repo}${access(r)}${r.owner ? ` as @${r.owner}` : ''}`).join(' and ');
+      return list.map((r) => `${r.repo}${access(r)}${r.owner && !r.watchOnly ? ` as @${r.owner}` : ''}`).join(' and ');
     },
 
     /** Loads templates and checks visibility. The main repo must work; the others may fail and retry later. */
@@ -141,6 +147,8 @@ export function createRepos(destinations, { token, ttlMs, logger = console, make
             logger.warn(`Can't read ${r.repo} with its GitHub token (${r.accessError}). Filing issues there will fail.`);
             return true;
           });
+          // Watched repos have no templates and aren't filed into, so there's nothing more to check.
+          if (r.watchOnly) return;
           r.owner = await r.github.tokenOwner?.();
           await r.templates.refresh().catch((err) => {
             if (r.main) throw err;

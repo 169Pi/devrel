@@ -319,3 +319,64 @@ test('classifyFollowUp asks for the intent schema and returns the intent', async
   assert.equal(await alpie.classifyFollowUp({ conversation: 'Vishal: thanks', hasDraft: false }), 'ack');
   assert.deepEqual(sent.response_format.json_schema.schema.properties.intent.enum, ['update', 'question', 'unrelated', 'ack']);
 });
+
+test('watched repos offer no templates, skip the startup checks, and say what they are known as', async () => {
+  const { createRepos } = await import('../src/repos.js');
+  const calls = [];
+  const repos = createRepos([{ repo: 'o/main', templateDir: 'x' }, { repo: '169Pi/.github', about: 'Good First Alpie', watchOnly: true }], {
+    token: 't',
+    logger: { warn: (m) => calls.push(`warn ${m}`), info() {} },
+    makeGitHub: ({ repo }) => ({
+      isPublic: async () => (calls.push(`isPublic ${repo}`), true),
+      tokenOwner: async () => (calls.push(`owner ${repo}`), 'bot'),
+      loadTemplates: async () => (calls.push(`templates ${repo}`), []),
+    }),
+  });
+  repos.list[0].templates = { all: async () => [{ id: 'o/main:t.md', repo: 'o/main' }], refresh: async () => {} };
+  await repos.start();
+  assert.ok(!calls.some((c) => /(owner|templates) 169Pi\/\.github|warn/.test(c)), calls.join('; '));
+  assert.deepEqual((await repos.templates()).map((t) => t.repo), ['o/main']);
+  assert.match(repos.describe(), /169Pi\/\.github \(questions only\)/);
+  assert.deepEqual(repos.access()[1], { repo: '169Pi/.github', visibility: 'public', error: null, issuesOnly: false, watchOnly: true, about: 'Good First Alpie', main: false });
+});
+
+test('answer prompt has pull requests by label, zeros included, and the open pull requests', async () => {
+  const pr = { repo: '169Pi/.github', number: 167, title: 'TempPR Technology', url: 'https://github.com/169Pi/.github/pull/167', author: 'nanjhana', draft: false, labels: ['good first alpie', 'ready-for-review'] };
+  const [system, user] = buildAnswerMessages({
+    repos: ['169Pi/devrel', '169Pi/.github'],
+    conversation: 'Vishal: How many ready to review issues for Good First Alpie?',
+    stats: [
+      {
+        repo: '169Pi/.github',
+        openIssues: 0,
+        closedIssues: 0,
+        openPRs: 29,
+        mergedPRs: 19,
+        closedPRs: 119,
+        unassignedOpenIssues: 0,
+        openedLastWeek: 0,
+        closedLastWeek: 0,
+        openByLabel: [],
+        prsByLabel: [
+          { name: 'ready-for-review', open: 8, merged: 0 },
+          { name: 'good first alpie', open: 26, merged: 5 },
+          { name: 'wontfix', open: 0, merged: 0 },
+        ],
+      },
+    ],
+    access: [{ repo: '169Pi/.github', visibility: 'public', error: null, watchOnly: true, about: 'Good First Alpie' }],
+    pulls: [pr],
+  });
+  assert.match(system.content, /"ready to review" means a label like "ready-for-review"/);
+  assert.match(system.content, /People often say "issues" when they mean pull requests/);
+  assert.match(user.content, /- 169Pi\/\.github \(public\), known as "Good First Alpie": questions only/);
+  assert.match(user.content, /pull requests by label: good first alpie 26 open, 5 merged; ready-for-review 8 open, 0 merged; no pull requests \(0 open, 0 merged\) with: wontfix/);
+  assert.match(user.content, /Open pull requests \(1 shown.*\n- 169Pi\/\.github#167 TempPR Technology \(good first alpie, ready-for-review\) by @nanjhana https:\/\/github\.com\/169Pi\/\.github\/pull\/167/);
+
+  // Links to pull requests and the repo's pull requests page survive the link filter.
+  const fetchImpl = async () =>
+    new Response(JSON.stringify({ choices: [{ message: { content: 'See https://github.com/169Pi/.github/pull/167 and https://github.com/169Pi/.github/pulls' } }] }));
+  const alpie = createAlpie({ apiKey: 'k', baseUrl: 'https://x', model: 'm', timeoutMs: 1000, fetchImpl });
+  const reply = await alpie.answer({ repos: ['169Pi/.github'], conversation: 'list them', templates: [], issues: [], pulls: [pr] });
+  assert.doesNotMatch(reply, /link removed/);
+});
