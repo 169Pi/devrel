@@ -80,6 +80,34 @@ export function createRepos(destinations, { token, ttlMs, logger = console, make
       return r.labels.list;
     },
 
+    /** Counts for analytical questions, cached for 2 minutes per repo. Null if GitHub wouldn't say. */
+    async stats(name) {
+      const r = this.get(name);
+      if (r.stats && Date.now() - r.stats.at < 2 * 60_000) return r.stats.value;
+      let value = null;
+      try {
+        value = (await r.github.stats?.()) ?? null;
+      } catch (err) {
+        logger.warn(`Couldn't count issues in ${r.repo}: ${err.message}`);
+      }
+      r.stats = { at: Date.now(), value };
+      return r.stats.value;
+    },
+
+    /**
+     * What Alpieca can see and do in each repo, for questions like "what do you have access to?".
+     * Templates kept outside a repo mean its token only needs Issues, so it can't read that repo's code.
+     */
+    access(subset = list) {
+      return subset.map((r) => ({
+        repo: r.repo,
+        visibility: r.public ? 'public' : 'private',
+        error: r.accessError,
+        issuesOnly: Boolean(r.templateDir || r.templatePath),
+        main: r.main,
+      }));
+    },
+
     /** How each repo looks from here, for the startup log: "owner/repo (private)", "owner/repo (no access: …)". */
     describe() {
       const access = (r) => (r.accessError ? ` (no access: ${r.accessError})` : r.public ? '' : ' (private)');
