@@ -56,9 +56,14 @@ const SOFT_ISSUE =
   /\b(issues?|ideas?|suggest(ion)?s?|propos(e|al)|requests?|merch|swag|hoodies?|t-?shirts?|stickers?|mugs?|showcase|built (a|an|with)|demo|we should|let'?s (make|build|add|do)|(would|it'?d) be (nice|great|cool|awesome))\b/i;
 const QUESTION = /^\s*(what|how|why|when|where|who|which|is|are|can|could|does|do|did|any|should|has|have|tell me)\b|\?\s*$/i;
 
+// Questions about numbers or access ("how many bugs are open?") are never something to raise.
+const ANALYTICS =
+  /^\s*(how many|how much|what (do|can) you (have )?(access|see)|(which|what) repos)\b|\b(have|got) access to\b/i;
+
 /** Cheap first guess at intent, so drafting can start before anyone clicks. */
 export function looksLikeIssue(text) {
   const t = String(text ?? '');
+  if (ANALYTICS.test(t) && QUESTION.test(t)) return false;
   return STRONG_ISSUE.test(t) || (SOFT_ISSUE.test(t) && !QUESTION.test(t));
 }
 

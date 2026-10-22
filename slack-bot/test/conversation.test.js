@@ -31,7 +31,18 @@ test('intent guess separates issue reports from questions', () => {
     'streaming cuts off after 4k tokens, error 502',
     "it'd be great if the playground had dark mode",
   ];
-  const questions = ['is there an issue about merch?', 'what issues are open?', 'how do I link my GitHub?', 'what is alpieca', 'thanks!', ''];
+  const questions = [
+    'is there an issue about merch?',
+    'what issues are open?',
+    'how do I link my GitHub?',
+    'what is alpieca',
+    'thanks!',
+    '',
+    'how many bugs are open?',
+    'how many PRs do you have access to?',
+    'what do you have access to?',
+    'which repos can you file into?',
+  ];
   for (const t of issues) assert.ok(looksLikeIssue(t), t);
   for (const t of questions) assert.ok(!looksLikeIssue(t), t);
 });
@@ -122,4 +133,52 @@ test('issues are credited to whoever raised them, not whoever clicked', () => {
   assert.equal(raiserOf([root, reply], '1'), 'UPRIYA');
   assert.equal(raiserOf([root, shot], '4'), 'UASHA', 'a screenshot is something raised');
   assert.equal(raiserOf([{ ts: '1', bot_id: 'B1', text: 'alert' }, mention], '2'), 'UVISHAL', 'never a bot');
+});
+
+test('answer prompt carries exact repo stats and what Alpieca can access', () => {
+  const [system, user] = buildAnswerMessages({
+    repos: ['169Pi/devrel', '169Pi/app'],
+    conversation: 'Priya: how many PRs are open, and what can you see?',
+    stats: [
+      { repo: '169Pi/devrel', openIssues: 12, closedIssues: 40, openPRs: 3, mergedPRs: 20, closedPRs: 2, unassignedOpenIssues: 5, openedLastWeek: 4, closedLastWeek: 1, openByLabel: [{ name: 'bug', open: 7 }] },
+      { repo: '169Pi/app', openIssues: 2, closedIssues: 0, openPRs: null, mergedPRs: null, closedPRs: null, unassignedOpenIssues: 2, openedLastWeek: 2, closedLastWeek: 0, openByLabel: [] },
+    ],
+    access: [
+      { repo: '169Pi/devrel', visibility: 'public', error: null, issuesOnly: false },
+      { repo: '169Pi/app', visibility: 'private', error: null, issuesOnly: true },
+    ],
+    asker: 'member',
+  });
+  assert.match(system.content, /use the exact numbers under "Repo stats"/);
+  assert.match(user.content, /- 169Pi\/devrel: issues 12 open, 40 closed \(5 open and unassigned\)/);
+  assert.match(user.content, /pull requests: 3 open, 20 merged, 2 closed without merging/);
+  assert.match(user.content, /open issues by label: bug 7/);
+  assert.match(user.content, /pull requests: unknown open/, "counts the token can't read are unknown, not 0");
+  assert.match(user.content, /- 169Pi\/app \(private\): issues only/);
+  assert.match(user.content, /full workspace member/);
+  assert.match(user.content, /Recently updated issues \(a sample/);
+});
+
+test("repo stats are cached, and a repo GitHub won't count is left out", async () => {
+  const { createRepos } = await import('../src/repos.js');
+  let calls = 0;
+  const repos = createRepos([{ repo: 'o/main' }, { repo: 'o/feedback', templateDir: 'x' }], {
+    token: 't',
+    logger: { warn() {}, info() {} },
+    makeGitHub: ({ repo }) => ({
+      stats: async () => {
+        calls++;
+        if (repo === 'o/feedback') throw new Error('Resource not accessible');
+        return { repo, openIssues: 3 };
+      },
+    }),
+  });
+  assert.equal((await repos.stats('o/main')).openIssues, 3);
+  assert.equal((await repos.stats('o/main')).openIssues, 3);
+  assert.equal(await repos.stats('o/feedback'), null);
+  assert.equal(calls, 2, 'the second main-repo lookup came from the cache');
+  assert.deepEqual(
+    repos.access().map((a) => [a.repo, a.issuesOnly]),
+    [['o/main', false], ['o/feedback', true]],
+  );
 });
