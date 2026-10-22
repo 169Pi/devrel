@@ -472,6 +472,9 @@ function redraftInto(client, logger, { channel, old, userId, privately }) {
   );
 }
 
+/** Alpieca's dedicated channels (SLACK_HOME_CHANNELS), where every message is for it. */
+const isHomeChannel = (channel) => config.slack.homeChannels.includes(channel);
+
 // Threads Alpieca has posted in ("channel:thread ts" -> { engaged, at }). Replies there reach it
 // without an @mention. A "yes" is kept for a day; a "no" is checked again after a minute. After a
 // restart, the thread itself says whether Alpieca is in it, so nothing is lost.
@@ -522,7 +525,9 @@ async function routeThreadReply(client, logger, { event, text, channel, thread, 
   if (intent === 'ack') return 'done';
   if (intent === 'unrelated') {
     await privately({
-      text: `:llama: That sounds separate from this thread, so let's keep this one on its topic. Ask me in a new message in <#${channel}> with <@${home.botUserId}>, or DM me, and I'll pick it up there.`,
+      text: isHomeChannel(channel)
+      ? `:llama: That sounds separate from this thread, so let's keep this one on its topic. Post it as a new message in <#${channel}>, or DM me, and I'll pick it up there.`
+      : `:llama: That sounds separate from this thread, so let's keep this one on its topic. Ask me in a new message in <#${channel}> with <@${home.botUserId}>, or DM me, and I'll pick it up there.`,
     });
     return 'done';
   }
@@ -579,7 +584,7 @@ const originFor = ({ channel, ts, thread, dm }) => (dm ? { channel, thread: thre
  * Handles a mention or DM: issue-like messages get a (private) offer to draft, with drafting already
  * under way; anything else is answered by Alpie, with a button to turn it into an issue after all.
  */
-async function handleConversation({ client, logger, event, text, isDm, followUp = false }) {
+async function handleConversation({ client, logger, event, text, isDm, followUp = false, passive = followUp }) {
   const asker = await access(client, event.user);
   if (!asker.member) {
     logger.info(`Ignoring message from ${event.user}: not a member of this workspace`);
@@ -607,6 +612,10 @@ async function handleConversation({ client, logger, event, text, isDm, followUp 
       if (err.data?.error !== 'already_reacted') logger.warn(`Couldn't react: ${err.data?.error ?? err.message}`);
     });
   }
+
+  // Messages that weren't addressed to Alpieca (in its home channel, or replies in its threads) that only
+  // say thanks get just the 🥧.
+  if (passive && isAcknowledgement(text)) return;
 
   // In a thread Alpieca is already part of, work out what the message is for before anything else:
   // more detail for the draft, a question, something unrelated, or just a thank-you.
@@ -724,12 +733,21 @@ app.message(async ({ message, client, logger, context }) => {
     if (message.subtype === 'thread_broadcast') return;
     return handleConversation({ client, logger, event: message, text: raw.replaceAll(`<@${context.botUserId}>`, '').trim(), isDm: true });
   }
-  // Replies in threads Alpieca is part of, without an @mention (those arrive as app_mention).
-  if (!message.thread_ts || message.thread_ts === message.ts || raw.includes(`<@${context.botUserId}>`)) return;
+  // Messages that @mention Alpieca arrive as app_mention instead.
+  if (raw.includes(`<@${context.botUserId}>`)) return;
   // Messages addressed to a teammate ("@Priya can you check?") are left to them.
   if (mentionsSomeone(raw)) return;
-  if (!(await isEngaged(client, logger, message.channel, message.thread_ts))) return;
-  await handleConversation({ client, logger, event: message, text: raw.trim(), isDm: false, followUp: true });
+  const reply = message.thread_ts && message.thread_ts !== message.ts;
+  const engaged = reply && (await isEngaged(client, logger, message.channel, message.thread_ts));
+  const text = raw.trim();
+  // In Alpieca's home channel every message is for it: new messages and replies in threads it isn't in
+  // yet are handled like an @mention.
+  if (isHomeChannel(message.channel) && !engaged) {
+    return handleConversation({ client, logger, event: message, text, isDm: false, passive: true });
+  }
+  // Elsewhere, only replies in threads Alpieca is part of. They never start a new draft on their own.
+  if (!engaged) return;
+  await handleConversation({ client, logger, event: message, text, isDm: false, followUp: true });
 });
 
 /** The thread draft message a button was clicked on, which becomes the issue's card once filed. */

@@ -211,3 +211,11 @@ test('Slack markup is flattened for Alpie', async () => {
   assert.match(long, /earlier replies omitted/);
   assert.ok(long.endsWith(`message 49 ${'x'.repeat(50)}`));
 });
+
+test("Alpieca's home channel defaults to 169Pi's and can be changed or turned off", () => {
+  const base = { SLACK_BOT_TOKEN: 'xoxb', SLACK_APP_TOKEN: 'xapp', GITHUB_TOKEN: 'g' };
+  assert.deepEqual(loadConfig(base).slack.homeChannels, ['C0C507GN03A']);
+  assert.deepEqual(loadConfig({ ...base, SLACK_HOME_CHANNELS: 'C111, G222' }).slack.homeChannels, ['C111', 'G222']);
+  assert.deepEqual(loadConfig({ ...base, SLACK_HOME_CHANNELS: '' }).slack.homeChannels, [], 'empty turns it off');
+  assert.throws(() => loadConfig({ ...base, SLACK_HOME_CHANNELS: '#alpieca' }), /must be channel IDs/);
+});
