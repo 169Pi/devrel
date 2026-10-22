@@ -42,6 +42,8 @@ const repos = createRepos(
     { repo: config.github.repo, ref: config.github.ref, templateDir: config.templateDir },
     // Feedback issues get the team @mention and link the files shared in Slack.
     ...(config.feedback ? [{ ...config.feedback, linkFiles: true }] : []),
+    // Repos Alpieca answers questions about but never files into, like Good First Alpie's.
+    ...config.github.watched.map((w) => ({ ...w, watchOnly: true })),
   ],
   { token: config.github.token, ttlMs: config.templateTtlMs },
 );
@@ -674,9 +676,16 @@ async function handleConversation({ client, logger, event, text, isDm, followUp 
   try {
     // Guests only hear about public repos.
     const visible = await reposFor(client, event.user);
-    const [{ feedback: conversation }, issues, stats, people] = await Promise.all([
+    // A repo GitHub won't list is left out, but logged: an empty list makes Alpie say it knows nothing.
+    const listed = (what, r, list) =>
+      list.catch((err) => {
+        if (!(what === 'pull requests' && [403, 404].includes(err.status))) logger.warn(`Couldn't list ${what} in ${r.repo}: ${err.message}`);
+        return [];
+      });
+    const [{ feedback: conversation }, issues, pulls, stats, people] = await Promise.all([
       conversationFeedback(client, logger, { channel, ts, threadTs: thread, keepOwn: true }),
-      Promise.all(visible.map((r) => r.github.recentIssues().catch(() => []))).then((lists) => lists.flat()),
+      Promise.all(visible.map((r) => listed('issues', r, r.github.recentIssues()))).then((lists) => lists.flat()),
+      Promise.all(visible.map((r) => listed('pull requests', r, r.github.recentPullRequests?.() ?? Promise.resolve([])))).then((lists) => lists.flat()),
       Promise.all(visible.map((r) => repos.stats(r.repo))).then((all) => all.filter(Boolean)),
       peopleStats(client, visible, text, event.user),
     ]);
@@ -687,6 +696,7 @@ async function handleConversation({ client, logger, event, text, isDm, followUp 
       conversation,
       templates: all,
       issues,
+      pulls,
       stats,
       people,
       access: repos.access(visible),

@@ -413,11 +413,14 @@ Rules:
 - Only mention or link issues from the list below, using their exact numbers and links. Never invent issue numbers or URLs.
 - For counts ("how many issues are open?", "how many PRs?"), use the exact numbers under "Repo stats". Never count the recently updated issues yourself: that list is only a sample. If a number says "unknown", say you can't see it.
 - For questions about what you can access or do, answer from "Access" below. Don't claim access you aren't given there.
+- People name repos by what they're known as (see "Access"): "Good First Alpie" questions are about the repo known as Good First Alpie. If you can't tell which repo they mean, ask, listing the repos.
+- People often say "issues" when they mean pull requests, and name labels loosely: "ready to review" means a label like "ready-for-review", and "Good First Alpie PRs" means the "good first alpie" label. Match ignoring case, spaces and hyphens, don't point out the difference, and use the label's exact name in your answer. If the label is on pull requests rather than issues, answer with the pull request numbers and say they're pull requests. A label with 0 is still an answer: say none have it yet.
 - For questions about a person's issues, use "People asked about". Issues raised from Slack are opened by the bot's account and @mention the person who raised them, so count "mention them" as theirs too. If a person isn't listed there, say you need their GitHub username (or for them to link it with "/alpieca github <username>").
 - When asked for a list, list the matching issues below (number, title, link). If there are more than you were given, say how many in total and link the repo's issues page.
 - If you have no data for what they asked (for example a date range other than the last 7 days, or pull request titles), say so and say what you can tell them instead.
 - If you can't tell what they want, don't guess and don't draft anything. In one or two lines, say what you can do (answer questions about issues, pull requests and access, or draft an issue from a bug, idea or feedback) and ask what would help: which repo, whose issues, or what went wrong.
 - If the person is describing a bug, idea or request, say you can turn it into an issue with the "Draft an issue" button.
+- Answer what was asked, without notes about access, filing or buttons unless they ask. (The Slack triage buttons only work on issue cards for repos you file into: never on pull requests or questions-only repos.)
 - Reply in plain Markdown. No JSON, no headings.`;
 
 const repoNames = (repos) => (repos.length === 1 ? `repo ${repos[0]}` : `repos ${repos.join(' and ')}`);
@@ -427,6 +430,15 @@ const MODEL_NAMES = { alpie_9b: 'Alpie Seed 9B', 'alpie-32b': 'Alpie Core 32B' }
 
 const n = (v) => (v == null ? 'unknown' : String(v));
 
+function prLabels(list) {
+  const used = list.filter((l) => l.open || l.merged).sort((a, b) => b.open - a.open || b.merged - a.merged);
+  const unused = list.filter((l) => !l.open && !l.merged).map((l) => l.name);
+  return [
+    used.map((l) => `${l.name} ${l.open} open, ${l.merged} merged`).join('; ') || 'none labeled',
+    ...(unused.length ? [`no pull requests (0 open, 0 merged) with: ${unused.join(', ')}`] : []),
+  ].join('; ');
+}
+
 function statsLines(s) {
   const labels = s.openByLabel?.length ? s.openByLabel.map((l) => `${l.name} ${l.open}`).join(', ') : 'none';
   return [
@@ -434,16 +446,19 @@ function statsLines(s) {
     `  pull requests: ${n(s.openPRs)} open, ${n(s.mergedPRs)} merged, ${n(s.closedPRs)} closed without merging`,
     `  last 7 days: ${n(s.openedLastWeek)} issues opened, ${n(s.closedLastWeek)} closed`,
     `  open issues by label: ${labels}`,
+    ...(s.prsByLabel ? [`  pull requests by label: ${prLabels(s.prsByLabel)}`] : []),
   ].join('\n');
 }
 
 function accessLines(access, asker) {
   const repos = access.map((a) => {
-    if (a.error) return `- ${a.repo} (${a.visibility}): no access right now (${a.error}), so filing there fails`;
+    const known = a.about ? `, known as "${a.about}"` : '';
+    if (a.error) return `- ${a.repo} (${a.visibility})${known}: no access right now (${a.error})`;
+    if (a.watchOnly) return `- ${a.repo} (${a.visibility})${known}: questions only. You read its issues and pull requests, but nothing is filed there`;
     const reach = a.issuesOnly
       ? "issues only: reads, files, labels, assigns, comments on and closes them; can't read the code or pull requests' contents"
       : 'reads the issue templates and pull request counts; reads, files, labels, assigns, comments on and closes issues; never changes code or merges pull requests';
-    return `- ${a.repo} (${a.visibility}): ${reach}`;
+    return `- ${a.repo} (${a.visibility})${known}: ${reach}`;
   });
   const role = !asker
     ? []
@@ -473,7 +488,7 @@ function personLines(p) {
     .join('\n');
 }
 
-export function buildAnswerMessages({ repo, repos = [repo], model, conversation, templates = [], issues = [], stats = [], access = [], asker, people = [] }) {
+export function buildAnswerMessages({ repo, repos = [repo], model, conversation, templates = [], issues = [], pulls = [], stats = [], access = [], asker, people = [] }) {
   const several = repos.length > 1;
   const templateList =
     templates.map((t) => `- ${t.name}${several && t.repo ? ` (files to ${t.repo})` : ''}: ${t.about || 'no description'}`).join('\n') ||
@@ -481,6 +496,10 @@ export function buildAnswerMessages({ repo, repos = [repo], model, conversation,
   const issueList = (list) =>
     list
       .map((i) => `- ${several && i.repo ? i.repo : ''}#${i.number} [${i.state}] ${i.title} (${i.labels.join(', ') || 'no labels'}) ${i.url}`)
+      .join('\n') || '- (none)';
+  const pullList = (list) =>
+    list
+      .map((p) => `- ${p.repo}#${p.number}${p.draft ? ' [draft]' : ''} ${p.title} (${p.labels.join(', ') || 'no labels'})${p.author ? ` by @${p.author}` : ''} ${p.url}`)
       .join('\n') || '- (none)';
   // Separate, counted lists: in one mixed list, Alpie Seed 9B sometimes said it had been given no issues.
   const open = issues.filter((i) => i.state === 'open');
@@ -495,7 +514,7 @@ export function buildAnswerMessages({ repo, repos = [repo], model, conversation,
     },
     {
       role: 'user',
-      content: `${access.length ? `Access:\n${accessLines(access, asker)}\n\n` : ''}${stats.length ? `Repo stats (exact, live from GitHub):\n${stats.map(statsLines).join('\n')}\n\n` : ''}${people.length ? `People asked about:\n${people.map(personLines).join('\n')}\n\n` : ''}Issue templates:\n${templateList}\n\nOpen issues (${open.length} shown, most recently updated first):\n${issueList(open)}\n\nRecently closed issues (${closed.length} shown):\n${issueList(closed)}\n\n<conversation>\n${conversation}\n</conversation>\n\nReply to the last message.`,
+      content: `${access.length ? `Access:\n${accessLines(access, asker)}\n\n` : ''}${stats.length ? `Repo stats (exact, live from GitHub):\n${stats.map(statsLines).join('\n')}\n\n` : ''}${people.length ? `People asked about:\n${people.map(personLines).join('\n')}\n\n` : ''}Issue templates:\n${templateList}\n\nOpen issues (${open.length} shown, most recently updated first):\n${issueList(open)}\n\nRecently closed issues (${closed.length} shown):\n${issueList(closed)}\n\nOpen pull requests (${pulls.length} shown, most recently updated first):\n${pullList(pulls)}\n\n<conversation>\n${conversation}\n</conversation>\n\nReply to the last message.`,
     },
   ];
 }
@@ -717,16 +736,17 @@ export function createAlpie({ apiKey, baseUrl, model, thinking = false, timeoutM
     },
 
     /** Answers a question in a Slack conversation, grounded in the templates and recent issues. */
-    async answer({ repo, repos = [repo], conversation, templates, issues, stats, access, asker, people = [], onProgress }) {
+    async answer({ repo, repos = [repo], conversation, templates, issues, pulls = [], stats, access, asker, people = [], onProgress }) {
       const allowed = [
-        ...repos.flatMap((r) => [`https://github.com/${r}`, `https://github.com/${r}/issues`]),
+        ...repos.flatMap((r) => [`https://github.com/${r}`, `https://github.com/${r}/issues`, `https://github.com/${r}/pulls`]),
         ...issues.map((i) => i.url),
+        ...pulls.map((p) => p.url),
         ...people.flatMap((p) => (p.stats ?? []).flatMap((s) => [personSearchUrl(s.repo, s.login), ...s.openIssues.map((i) => i.url)])),
         ...(conversation.match(URL) ?? []),
       ];
       // Partial answers shown while streaming get the same link filtering as the final one.
       const progress = onProgress && ((p) => onProgress({ ...p, output: keepKnownLinks(p.output, allowed) }));
-      const reply = stripReasoning(await complete(buildAnswerMessages({ repos, model, conversation, templates, issues, stats, access, asker, people }), { onProgress: progress }));
+      const reply = stripReasoning(await complete(buildAnswerMessages({ repos, model, conversation, templates, issues, pulls, stats, access, asker, people }), { onProgress: progress }));
       if (!reply) throw new AlpieError('Alpie returned an empty answer');
       return keepKnownLinks(reply, allowed).slice(0, 3500);
     },

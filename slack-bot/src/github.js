@@ -75,6 +75,20 @@ export function createGitHub({ token, repo, ref, logger = console }) {
       }));
     },
 
+    /** Open pull requests, most recently updated first, as context for answers. */
+    async recentPullRequests(limit = 30) {
+      const { data } = await octokit.pulls.list({ owner, repo: name, state: 'open', sort: 'updated', direction: 'desc', per_page: limit });
+      return data.map((p) => ({
+        repo,
+        number: p.number,
+        title: p.title,
+        url: p.html_url,
+        author: p.user?.login ?? null,
+        draft: Boolean(p.draft),
+        labels: p.labels.map((l) => (typeof l === 'string' ? l : l.name)),
+      }));
+    },
+
     /**
      * One person's issues, for "how many open issues by @vishal?". Issues raised from Slack are opened by
      * the bot's account and @mention their reporter, so "mentioned" is how those are counted.
@@ -135,6 +149,13 @@ export function createGitHub({ token, repo, ref, logger = console }) {
           openPRs: pullRequests(states: OPEN) { totalCount }
           mergedPRs: pullRequests(states: MERGED) { totalCount }
           closedPRs: pullRequests(states: CLOSED) { totalCount }
+          labels(first: 50) {
+            nodes {
+              name
+              openPRs: pullRequests(states: OPEN) { totalCount }
+              mergedPRs: pullRequests(states: MERGED) { totalCount }
+            }
+          }
         }
         unassigned: search(type: ISSUE, query: $unassigned, first: 1) { issueCount }
         opened: search(type: ISSUE, query: $opened, first: 1) { issueCount }
@@ -171,6 +192,11 @@ export function createGitHub({ token, repo, ref, logger = console }) {
           .filter((l) => l.open > 0)
           .sort((a, b) => b.open - a.open)
           .slice(0, 15),
+        // Every label, even unused ones, so "how many PRs are ready for review?" can be answered with 0.
+        // Pull requests are where labels like "ready-for-review" live.
+        prsByLabel: data.prs?.labels
+          ? data.prs.labels.nodes.map((l) => ({ name: l.name, open: l.openPRs.totalCount, merged: l.mergedPRs.totalCount }))
+          : null,
       };
     },
 
