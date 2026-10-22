@@ -74,6 +74,62 @@ export function createGitHub({ token, repo, ref, logger = console }) {
         }));
     },
 
+    /**
+     * Exact counts for analytical questions ("how many issues are open?"), in one GraphQL call.
+     * Counts the token can't read (pull requests, with an Issues-only token) come back null.
+     */
+    async stats({ now = new Date() } = {}) {
+      const week = new Date(now - 7 * 86_400_000).toISOString().slice(0, 10);
+      const q = (rest) => `repo:${repo} is:issue ${rest}`;
+      const query = `query($owner: String!, $name: String!, $unassigned: String!, $opened: String!, $closed: String!) {
+        repository(owner: $owner, name: $name) {
+          openIssues: issues(states: OPEN) { totalCount }
+          closedIssues: issues(states: CLOSED) { totalCount }
+          labels(first: 50) { nodes { name issues(states: OPEN) { totalCount } } }
+        }
+        prs: repository(owner: $owner, name: $name) {
+          openPRs: pullRequests(states: OPEN) { totalCount }
+          mergedPRs: pullRequests(states: MERGED) { totalCount }
+          closedPRs: pullRequests(states: CLOSED) { totalCount }
+        }
+        unassigned: search(type: ISSUE, query: $unassigned, first: 1) { issueCount }
+        opened: search(type: ISSUE, query: $opened, first: 1) { issueCount }
+        closed: search(type: ISSUE, query: $closed, first: 1) { issueCount }
+      }`;
+      let data;
+      try {
+        data = await octokit.graphql(query, {
+          owner,
+          name,
+          unassigned: q('is:open no:assignee'),
+          opened: q(`created:>=${week}`),
+          closed: q(`closed:>=${week}`),
+        });
+      } catch (err) {
+        // Partial results: e.g. an Issues-only token can't see pull requests, but its issue counts are fine.
+        if (!err.data?.repository) throw err;
+        data = err.data;
+      }
+      const r = data.repository;
+      const count = (c) => c?.totalCount ?? null;
+      return {
+        repo,
+        openIssues: count(r.openIssues),
+        closedIssues: count(r.closedIssues),
+        openPRs: count(data.prs?.openPRs),
+        mergedPRs: count(data.prs?.mergedPRs),
+        closedPRs: count(data.prs?.closedPRs),
+        unassignedOpenIssues: data.unassigned?.issueCount ?? null,
+        openedLastWeek: data.opened?.issueCount ?? null,
+        closedLastWeek: data.closed?.issueCount ?? null,
+        openByLabel: (r.labels?.nodes ?? [])
+          .map((l) => ({ name: l.name, open: l.issues.totalCount }))
+          .filter((l) => l.open > 0)
+          .sort((a, b) => b.open - a.open)
+          .slice(0, 15),
+      };
+    },
+
     async getIssue(number) {
       return (await octokit.issues.get({ owner, repo: name, issue_number: number })).data;
     },

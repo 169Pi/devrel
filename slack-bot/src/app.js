@@ -442,7 +442,8 @@ const originFor = ({ channel, ts, thread, dm }) => (dm ? { channel, thread: thre
  * under way; anything else is answered by Alpie, with a button to turn it into an issue after all.
  */
 async function handleConversation({ client, logger, event, text, isDm }) {
-  if (!(await access(client, event.user)).member) {
+  const asker = await access(client, event.user);
+  if (!asker.member) {
     logger.info(`Ignoring message from ${event.user}: not a member of this workspace`);
     return;
   }
@@ -495,9 +496,10 @@ async function handleConversation({ client, logger, event, text, isDm }) {
   try {
     // Guests only hear about public repos.
     const visible = await reposFor(client, event.user);
-    const [{ feedback: conversation }, issues] = await Promise.all([
+    const [{ feedback: conversation }, issues, stats] = await Promise.all([
       conversationFeedback(client, logger, { channel, ts, threadTs: thread }),
       Promise.all(visible.map((r) => r.github.recentIssues().catch(() => []))).then((lists) => lists.flat()),
+      Promise.all(visible.map((r) => repos.stats(r.repo))).then((all) => all.filter(Boolean)),
     ]);
     progress.phase = 'thinking';
     const reply = await alpie.answer({
@@ -506,6 +508,9 @@ async function handleConversation({ client, logger, event, text, isDm }) {
       conversation,
       templates: all,
       issues,
+      stats,
+      access: repos.access(visible),
+      asker: asker.reason === 'guest' ? 'guest' : 'member',
       onProgress: (p) => Object.assign(progress, p),
     });
     answer = markdownToMrkdwn(reply).slice(0, 2900);

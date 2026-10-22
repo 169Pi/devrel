@@ -411,6 +411,8 @@ Rules:
 - Answer in a few short sentences or bullets. Be friendly and direct.
 - Use only the information given here. If you don't know, say so; don't guess.
 - Only mention or link issues from the list below, using their exact numbers and links. Never invent issue numbers or URLs.
+- For counts ("how many issues are open?", "how many PRs?"), use the exact numbers under "Repo stats". Never count the recently updated issues yourself: that list is only a sample. If a number says "unknown", say you can't see it.
+- For questions about what you can access or do, answer from "Access" below. Don't claim access you aren't given there.
 - If the person is describing a bug, idea or request, say you can turn it into an issue with the "Draft an issue" button.
 - Reply in plain Markdown. No JSON, no headings.`;
 
@@ -419,7 +421,37 @@ const repoNames = (repos) => (repos.length === 1 ? `repo ${repos[0]}` : `repos $
 /** Friendly names for the model ids people might ask about. */
 const MODEL_NAMES = { alpie_9b: 'Alpie Seed 9B', 'alpie-32b': 'Alpie Core 32B' };
 
-export function buildAnswerMessages({ repo, repos = [repo], model, conversation, templates = [], issues = [] }) {
+const n = (v) => (v == null ? 'unknown' : String(v));
+
+function statsLines(s) {
+  const labels = s.openByLabel?.length ? s.openByLabel.map((l) => `${l.name} ${l.open}`).join(', ') : 'none';
+  return [
+    `- ${s.repo}: issues ${n(s.openIssues)} open, ${n(s.closedIssues)} closed (${n(s.unassignedOpenIssues)} open and unassigned)`,
+    `  pull requests: ${n(s.openPRs)} open, ${n(s.mergedPRs)} merged, ${n(s.closedPRs)} closed without merging`,
+    `  last 7 days: ${n(s.openedLastWeek)} issues opened, ${n(s.closedLastWeek)} closed`,
+    `  open issues by label: ${labels}`,
+  ].join('\n');
+}
+
+function accessLines(access, asker) {
+  const repos = access.map((a) => {
+    if (a.error) return `- ${a.repo} (${a.visibility}): no access right now (${a.error}), so filing there fails`;
+    const reach = a.issuesOnly
+      ? "issues only: reads, files, labels, assigns, comments on and closes them; can't read the code or pull requests' contents"
+      : 'reads the issue templates and pull request counts; reads, files, labels, assigns, comments on and closes issues; never changes code or merges pull requests';
+    return `- ${a.repo} (${a.visibility}): ${reach}`;
+  });
+  const role = !asker
+    ? []
+    : [
+        asker === 'guest'
+          ? '- The person asking is a guest: they can raise issues in public repos, but not use the triage buttons or see private repos.'
+          : '- The person asking is a full workspace member: they can raise issues and use the triage buttons.',
+      ];
+  return [...repos, ...role, '- Only members of this Slack workspace can use you. Files shared in Slack stay in Slack.'].join('\n');
+}
+
+export function buildAnswerMessages({ repo, repos = [repo], model, conversation, templates = [], issues = [], stats = [], access = [], asker }) {
   const several = repos.length > 1;
   const templateList =
     templates.map((t) => `- ${t.name}${several && t.repo ? ` (files to ${t.repo})` : ''}: ${t.about || 'no description'}`).join('\n') ||
@@ -438,7 +470,7 @@ export function buildAnswerMessages({ repo, repos = [repo], model, conversation,
     },
     {
       role: 'user',
-      content: `Issue templates:\n${templateList}\n\nRecently updated issues:\n${issueList}\n\n<conversation>\n${conversation}\n</conversation>\n\nReply to the last message.`,
+      content: `${access.length ? `Access:\n${accessLines(access, asker)}\n\n` : ''}${stats.length ? `Repo stats (exact, live from GitHub):\n${stats.map(statsLines).join('\n')}\n\n` : ''}Issue templates:\n${templateList}\n\nRecently updated issues (a sample, not all of them):\n${issueList}\n\n<conversation>\n${conversation}\n</conversation>\n\nReply to the last message.`,
     },
   ];
 }
@@ -620,11 +652,11 @@ export function createAlpie({ apiKey, baseUrl, model, thinking = false, timeoutM
     },
 
     /** Answers a question in a Slack conversation, grounded in the templates and recent issues. */
-    async answer({ repo, repos = [repo], conversation, templates, issues, onProgress }) {
+    async answer({ repo, repos = [repo], conversation, templates, issues, stats, access, asker, onProgress }) {
       const allowed = [...repos.map((r) => `https://github.com/${r}`), ...issues.map((i) => i.url), ...(conversation.match(URL) ?? [])];
       // Partial answers shown while streaming get the same link filtering as the final one.
       const progress = onProgress && ((p) => onProgress({ ...p, output: keepKnownLinks(p.output, allowed) }));
-      const reply = stripReasoning(await complete(buildAnswerMessages({ repos, model, conversation, templates, issues }), { onProgress: progress }));
+      const reply = stripReasoning(await complete(buildAnswerMessages({ repos, model, conversation, templates, issues, stats, access, asker }), { onProgress: progress }));
       if (!reply) throw new AlpieError('Alpie returned an empty answer');
       return keepKnownLinks(reply, allowed).slice(0, 3500);
     },
