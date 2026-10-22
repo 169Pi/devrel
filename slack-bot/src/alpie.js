@@ -413,6 +413,10 @@ Rules:
 - Only mention or link issues from the list below, using their exact numbers and links. Never invent issue numbers or URLs.
 - For counts ("how many issues are open?", "how many PRs?"), use the exact numbers under "Repo stats". Never count the recently updated issues yourself: that list is only a sample. If a number says "unknown", say you can't see it.
 - For questions about what you can access or do, answer from "Access" below. Don't claim access you aren't given there.
+- For questions about a person's issues, use "People asked about". Issues raised from Slack are opened by the bot's account and @mention the person who raised them, so count "mention them" as theirs too. If a person isn't listed there, say you need their GitHub username (or for them to link it with "/alpieca github <username>").
+- When asked for a list, list the matching issues below (number, title, link). If there are more than you were given, say how many in total and link the repo's issues page.
+- If you have no data for what they asked (for example a date range other than the last 7 days, or pull request titles), say so and say what you can tell them instead.
+- If you can't tell what they want, don't guess and don't draft anything. In one or two lines, say what you can do (answer questions about issues, pull requests and access, or draft an issue from a bug, idea or feedback) and ask what would help: which repo, whose issues, or what went wrong.
 - If the person is describing a bug, idea or request, say you can turn it into an issue with the "Draft an issue" button.
 - Reply in plain Markdown. No JSON, no headings.`;
 
@@ -451,15 +455,36 @@ function accessLines(access, asker) {
   return [...repos, ...role, '- Only members of this Slack workspace can use you. Files shared in Slack stay in Slack.'].join('\n');
 }
 
-export function buildAnswerMessages({ repo, repos = [repo], model, conversation, templates = [], issues = [], stats = [], access = [], asker }) {
+/** GitHub's own list of a person's open issues in a repo, so answers can link to all of them. */
+export const personSearchUrl = (repo, login) => `https://github.com/${repo}/issues?q=is%3Aissue+is%3Aopen+involves%3A${login}`;
+
+function personLines(p) {
+  if (p.unlinked) return `- ${p.name} hasn't linked a GitHub account, so you can't count their issues. They can link it with "/alpieca github <username>".`;
+  if (!p.stats.length) return `- @${p.login}${p.name ? ` (${p.name})` : ''}: GitHub has no user by that name, or wouldn't search for them.`;
+  return p.stats
+    .map((s) => {
+      const list = s.openIssues.map((i) => `#${i.number} ${i.title} ${i.url}`).join('; ') || 'none';
+      return (
+        `- @${p.login}${p.name ? ` (${p.name})` : ''} in ${s.repo}: ${s.openOpened} open issues they opened on GitHub (${s.allOpened} ever), ` +
+        `${s.openAssigned} open assigned to them, ${s.openMentioned} open that mention them, ${s.openInvolved} open involving them in any way. ` +
+        `Open issues involving them: ${list}. All of them on GitHub: ${personSearchUrl(s.repo, s.login)}`
+      );
+    })
+    .join('\n');
+}
+
+export function buildAnswerMessages({ repo, repos = [repo], model, conversation, templates = [], issues = [], stats = [], access = [], asker, people = [] }) {
   const several = repos.length > 1;
   const templateList =
     templates.map((t) => `- ${t.name}${several && t.repo ? ` (files to ${t.repo})` : ''}: ${t.about || 'no description'}`).join('\n') ||
     '- (none)';
-  const issueList =
-    issues
+  const issueList = (list) =>
+    list
       .map((i) => `- ${several && i.repo ? i.repo : ''}#${i.number} [${i.state}] ${i.title} (${i.labels.join(', ') || 'no labels'}) ${i.url}`)
       .join('\n') || '- (none)';
+  // Separate, counted lists: in one mixed list, Alpie Seed 9B sometimes said it had been given no issues.
+  const open = issues.filter((i) => i.state === 'open');
+  const closed = issues.filter((i) => i.state !== 'open');
   return [
     {
       role: 'system',
@@ -470,7 +495,7 @@ export function buildAnswerMessages({ repo, repos = [repo], model, conversation,
     },
     {
       role: 'user',
-      content: `${access.length ? `Access:\n${accessLines(access, asker)}\n\n` : ''}${stats.length ? `Repo stats (exact, live from GitHub):\n${stats.map(statsLines).join('\n')}\n\n` : ''}Issue templates:\n${templateList}\n\nRecently updated issues (a sample, not all of them):\n${issueList}\n\n<conversation>\n${conversation}\n</conversation>\n\nReply to the last message.`,
+      content: `${access.length ? `Access:\n${accessLines(access, asker)}\n\n` : ''}${stats.length ? `Repo stats (exact, live from GitHub):\n${stats.map(statsLines).join('\n')}\n\n` : ''}${people.length ? `People asked about:\n${people.map(personLines).join('\n')}\n\n` : ''}Issue templates:\n${templateList}\n\nOpen issues (${open.length} shown, most recently updated first):\n${issueList(open)}\n\nRecently closed issues (${closed.length} shown):\n${issueList(closed)}\n\n<conversation>\n${conversation}\n</conversation>\n\nReply to the last message.`,
     },
   ];
 }
@@ -652,11 +677,16 @@ export function createAlpie({ apiKey, baseUrl, model, thinking = false, timeoutM
     },
 
     /** Answers a question in a Slack conversation, grounded in the templates and recent issues. */
-    async answer({ repo, repos = [repo], conversation, templates, issues, stats, access, asker, onProgress }) {
-      const allowed = [...repos.map((r) => `https://github.com/${r}`), ...issues.map((i) => i.url), ...(conversation.match(URL) ?? [])];
+    async answer({ repo, repos = [repo], conversation, templates, issues, stats, access, asker, people = [], onProgress }) {
+      const allowed = [
+        ...repos.flatMap((r) => [`https://github.com/${r}`, `https://github.com/${r}/issues`]),
+        ...issues.map((i) => i.url),
+        ...people.flatMap((p) => (p.stats ?? []).flatMap((s) => [personSearchUrl(s.repo, s.login), ...s.openIssues.map((i) => i.url)])),
+        ...(conversation.match(URL) ?? []),
+      ];
       // Partial answers shown while streaming get the same link filtering as the final one.
       const progress = onProgress && ((p) => onProgress({ ...p, output: keepKnownLinks(p.output, allowed) }));
-      const reply = stripReasoning(await complete(buildAnswerMessages({ repos, model, conversation, templates, issues, stats, access, asker }), { onProgress: progress }));
+      const reply = stripReasoning(await complete(buildAnswerMessages({ repos, model, conversation, templates, issues, stats, access, asker, people }), { onProgress: progress }));
       if (!reply) throw new AlpieError('Alpie returned an empty answer');
       return keepKnownLinks(reply, allowed).slice(0, 3500);
     },

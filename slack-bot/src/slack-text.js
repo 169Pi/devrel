@@ -49,22 +49,49 @@ export function markdownToMrkdwn(markdown) {
   return text.replace(/\u0000(\d+)\u0000/g, (_, i) => links[Number(i)]);
 }
 
-// Clear signs someone wants something raised, even when phrased as a question ("can you file this?").
-const STRONG_ISSUE = /\b(bug|broken|crash(es|ed|ing)?|doesn'?t work|not working|error|fails?|failing|feature request|raise|file|report|log (this|it))\b/i;
+// Someone asking for an issue to be filed, even as a question ("can you raise this?"). Always a draft.
+const WANTS_FILED =
+  /\b((raise|file|log|report|open|create|make|draft) (this|it|that|one|an? (issue|bug|ticket|feedback))|turn (this|it|that) into|feature request|bug report)\b/i;
+// Asking about issues rather than raising one: counts, lists, people, status and access.
+// "Total number of issues raised here" or "how many open issues by @vishal" is never feedback.
+const ABOUT_ISSUES =
+  /\b(how many|how much|total|number of|count of|stats|statistics|summar(y|ise|ize)|(give|show|send|get) me|i want (a |the )?(list|count|number)|list (all|the|of|every|open|closed|my|our)|status of|assigned to|opened by|raised by|filed by|created by|reported by|by (<@\w+>|@[\w-]+|me)|my( open| closed)? (issues|prs|pull requests)|(have|got) access|what (do|can) you (have access|access|see)|(which|what) repos)\b/i;
+// Clear signs of a problem worth raising.
+const PROBLEM =
+  /\b(bug|broken|crash(es|ed|ing)?|doesn'?t work|not working|error|fails?|failing|freez(es|ing)|frozen|stuck|hangs|glitch(es|y)?|overlap(s|ping)?|cut off|can'?t (log|sign|load|open|see|send)|raise|report)\b/i;
 // Softer signs that only count when the message isn't a question ("is there an issue about merch?").
 const SOFT_ISSUE =
   /\b(issues?|ideas?|suggest(ion)?s?|propos(e|al)|requests?|merch|swag|hoodies?|t-?shirts?|stickers?|mugs?|showcase|built (a|an|with)|demo|we should|let'?s (make|build|add|do)|(would|it'?d) be (nice|great|cool|awesome))\b/i;
-const QUESTION = /^\s*(what|how|why|when|where|who|which|is|are|can|could|does|do|did|any|should|has|have|tell me)\b|\?\s*$/i;
+const QUESTION = /^\s*(what|how|why|when|where|who|which|is|are|can|could|does|do|did|any|should|has|have|tell me|list|show)\b|\?\s*$/i;
+// "Hey, how many…" is still a question.
+const GREETING = /^\s*(?:(?:hey|hi|hello|yo|ok(?:ay)?|so|um+|hmm+|please|pls)\b[\s,!.:-]*)+/i;
 
-// Questions about numbers or access ("how many bugs are open?") are never something to raise.
-const ANALYTICS =
-  /^\s*(how many|how much|what (do|can) you (have )?(access|see)|(which|what) repos)\b|\b(have|got) access to\b/i;
+/** True when the message asks about issues, PRs or access, rather than raising something. */
+export function asksAboutIssues(text) {
+  const t = String(text ?? '').replace(GREETING, '');
+  return !WANTS_FILED.test(t) && ABOUT_ISSUES.test(t);
+}
 
-/** Cheap first guess at intent, so drafting can start before anyone clicks. */
+/**
+ * Cheap first guess at intent, so drafting can start before anyone clicks. When in doubt it says no:
+ * a question gets an answer with a "Draft an issue" button, which is cheaper to undo than a public draft.
+ */
 export function looksLikeIssue(text) {
+  const t = String(text ?? '').replace(GREETING, '');
+  if (WANTS_FILED.test(t)) return true;
+  if (ABOUT_ISSUES.test(t)) return false;
+  // A word or two ("issues", "merch") isn't enough to draft from.
+  if (t.trim().split(/\s+/).length < 3 && !PROBLEM.test(t)) return false;
+  return PROBLEM.test(t) || (SOFT_ISSUE.test(t) && !QUESTION.test(t));
+}
+
+/** People a question is about: Slack mentions (<@U123>), typed GitHub usernames (@octocat), and "me"/"my". */
+export function peopleAskedAbout(text) {
   const t = String(text ?? '');
-  if (ANALYTICS.test(t) && QUESTION.test(t)) return false;
-  return STRONG_ISSUE.test(t) || (SOFT_ISSUE.test(t) && !QUESTION.test(t));
+  const slack = [...t.matchAll(/<@(\w+)(?:\|[^>]*)?>/g)].map((m) => m[1]);
+  const github = [...t.replace(/<[^>]*>/g, ' ').matchAll(/(?:^|[\s(,])@([A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38})\b/g)].map((m) => m[1]);
+  const me = /\b(my|mine|by me|to me|i (opened|raised|filed|reported|created))\b/i.test(t);
+  return { slack: [...new Set(slack)], github: [...new Set(github)], me };
 }
 
 /**
