@@ -100,7 +100,7 @@ test('answer() strips reasoning and invented links', async () => {
     templates: [],
     issues: [{ number: 7, title: 'Hoodie', state: 'open', labels: [], url: 'https://github.com/169Pi/devrel/issues/7' }],
   });
-  assert.equal(reply, 'Yes: **#7** is open (https://github.com/169Pi/devrel/issues/7). See also [link removed]');
+  assert.deepEqual(reply, { text: 'Yes: **#7** is open (https://github.com/169Pi/devrel/issues/7). See also [link removed]', offerDraft: false });
 });
 
 test('Alpie Markdown becomes safe Slack mrkdwn', () => {
@@ -258,7 +258,7 @@ test('answer prompt lists a person\'s issues, says who is unlinked, and asks whe
     issues: [],
     people: [{ login: 'kindavishal', stats: [{ repo: '169Pi/devrel', login: 'kindavishal', openIssues: [{ number: 9, url: 'https://github.com/169Pi/devrel/issues/9' }] }] }],
   });
-  assert.doesNotMatch(reply, /link removed/);
+  assert.doesNotMatch(reply.text, /link removed/);
 });
 
 test('asking to redraft is recognised, without catching problems that mention trying again', () => {
@@ -378,5 +378,32 @@ test('answer prompt has pull requests by label, zeros included, and the open pul
     new Response(JSON.stringify({ choices: [{ message: { content: 'See https://github.com/169Pi/.github/pull/167 and https://github.com/169Pi/.github/pulls' } }] }));
   const alpie = createAlpie({ apiKey: 'k', baseUrl: 'https://x', model: 'm', timeoutMs: 1000, fetchImpl });
   const reply = await alpie.answer({ repos: ['169Pi/.github'], conversation: 'list them', templates: [], issues: [], pulls: [pr] });
-  assert.doesNotMatch(reply, /link removed/);
+  assert.doesNotMatch(reply.text, /link removed/);
+});
+
+test('the Draft an issue button is offered only when Alpie marks the message as something to file', async () => {
+  const { splitDraftOffer, OFFER_DRAFT } = await import('../src/alpie.js');
+  assert.deepEqual(splitDraftOffer(`Sounds like a bug in the chat box. Want me to draft it?\n${OFFER_DRAFT}`), {
+    text: 'Sounds like a bug in the chat box. Want me to draft it?',
+    offerDraft: true,
+  });
+  assert.deepEqual(splitDraftOffer('There are 8 pull requests with ready-for-review.'), { text: 'There are 8 pull requests with ready-for-review.', offerDraft: false });
+  assert.equal(splitDraftOffer('Want me to draft it? [Offer Draft]').offerDraft, true, 'case and spacing vary');
+  // What the reply says wins over a missing or stray marker (both seen from Alpie Seed 9B).
+  assert.equal(splitDraftOffer('That sounds useful! Would you like me to draft a GitHub issue for this suggestion?').offerDraft, true);
+  assert.equal(splitDraftOffer(`I don't have details on a dark mode feature. Which app do you mean?\n${OFFER_DRAFT}`).offerDraft, false);
+  assert.equal(splitDraftOffer('I can also file new issues, assign people and close issues in 169Pi/devrel.').offerDraft, false, 'describing access is not an offer');
+  assert.equal(splitDraftOffer('There are 8 pull requests. Would you like me to list them?').offerDraft, false);
+  // While streaming, half a marker never shows.
+  assert.equal(splitDraftOffer('Want me to draft it?\n[offer-dr').text, 'Want me to draft it?');
+  assert.equal(splitDraftOffer('See [the docs](https://x) [').text, 'See [the docs](https://x)');
+
+  const [system] = buildAnswerMessages({ repo: '169Pi/devrel', conversation: 'x' });
+  assert.match(system.content, /end your reply with the line \[offer-draft\]/);
+  assert.match(system.content, /Questions about existing issues, pull requests, counts, people, access or how to use you are not/);
+
+  const fetchImpl = async () => new Response(JSON.stringify({ choices: [{ message: { content: `The login screen freezing sounds like a bug. I can draft it.\n${OFFER_DRAFT}` } }] }));
+  const alpie = createAlpie({ apiKey: 'k', baseUrl: 'https://x', model: 'm', timeoutMs: 1000, fetchImpl });
+  const reply = await alpie.answer({ repos: ['169Pi/devrel'], conversation: 'the login screen freezes', templates: [], issues: [] });
+  assert.deepEqual(reply, { text: 'The login screen freezing sounds like a bug. I can draft it.', offerDraft: true });
 });

@@ -151,7 +151,7 @@ test('streamed answers are filtered for invented links while still partial', asy
     issues: [{ number: 7, title: 't', state: 'open', labels: [], url: 'https://github.com/169Pi/devrel/issues/7' }],
     onProgress: (p) => partials.push(p.output),
   });
-  assert.equal(reply, 'See [link removed] and https://github.com/169Pi/devrel/issues/7 for more.');
+  assert.equal(reply.text, 'See [link removed] and https://github.com/169Pi/devrel/issues/7 for more.');
   assert.ok(partials.every((o) => !o.includes('fake.example/x')), 'no partial ever shows the invented link');
 });
 

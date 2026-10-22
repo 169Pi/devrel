@@ -584,7 +584,7 @@ const originFor = ({ channel, ts, thread, dm }) => (dm ? { channel, thread: thre
 
 /**
  * Handles a mention or DM: issue-like messages get a (private) offer to draft, with drafting already
- * under way; anything else is answered by Alpie, with a button to turn it into an issue after all.
+ * under way; anything else is answered by Alpie, with a button to draft an issue only when Alpie offers to.
  */
 async function handleConversation({ client, logger, event, text, isDm, followUp = false, passive = followUp }) {
   const asker = await access(client, event.user);
@@ -673,6 +673,7 @@ async function handleConversation({ client, logger, event, text, isDm, followUp 
   const placeholder = await publicly({ ...frame(0), unfurl_links: false });
   const stopAnimation = startTicker((tick) => client.chat.update({ channel: placeholder.channel, ts: placeholder.ts, ...frame(tick) }));
   let answer;
+  let offerDraft = false;
   try {
     // Guests only hear about public repos.
     const visible = await reposFor(client, event.user);
@@ -703,7 +704,8 @@ async function handleConversation({ client, logger, event, text, isDm, followUp 
       asker: asker.reason === 'guest' ? 'guest' : 'member',
       onProgress: (p) => Object.assign(progress, p),
     });
-    answer = markdownToMrkdwn(reply).slice(0, 2900);
+    answer = markdownToMrkdwn(reply.text).slice(0, 2900);
+    offerDraft = reply.offerDraft;
   } catch (err) {
     logger.warn(`Alpie answer failed: ${err.message}`);
     answer = `:warning: Sorry, I couldn't answer that right now (${err instanceof AlpieError ? err.message : 'something went wrong'}).`;
@@ -718,11 +720,16 @@ async function handleConversation({ client, logger, event, text, isDm, followUp 
       unfurl_links: false,
       blocks: [
         { type: 'section', text: { type: 'mrkdwn', text: answer } },
-        {
-          type: 'actions',
-          block_id: 'answer_actions',
-          elements: [{ type: 'button', action_id: 'mention_draft', text: { type: 'plain_text', text: '📝 Draft an issue from this' }, value }],
-        },
+        // Only when Alpie judged the message to be something worth filing; plain questions get none.
+        ...(offerDraft
+          ? [
+              {
+                type: 'actions',
+                block_id: 'answer_actions',
+                elements: [{ type: 'button', action_id: 'mention_draft', text: { type: 'plain_text', text: '📝 Draft an issue from this' }, value }],
+              },
+            ]
+          : []),
         { type: 'context', elements: [{ type: 'mrkdwn', text: 'Answered by Alpie :sparkles: · it can make mistakes, so check anything important.' }] },
       ],
     })
