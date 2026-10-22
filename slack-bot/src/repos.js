@@ -94,6 +94,23 @@ export function createRepos(destinations, { token, ttlMs, logger = console, make
       return r.stats.value;
     },
 
+    /** One person's issues in a repo, cached for 2 minutes. Null if GitHub has no such user or wouldn't say. */
+    async personStats(name, login) {
+      const r = this.get(name);
+      r.people ??= new Map();
+      const key = login.toLowerCase();
+      const hit = r.people.get(key);
+      if (hit && Date.now() - hit.at < 2 * 60_000) return hit.value;
+      let value = null;
+      try {
+        value = (await r.github.personStats?.(login)) ?? null;
+      } catch (err) {
+        logger.warn(`Couldn't count @${login}'s issues in ${r.repo}: ${err.message}`);
+      }
+      r.people.set(key, { at: Date.now(), value });
+      return value;
+    },
+
     /**
      * What Alpieca can see and do in each repo, for questions like "what do you have access to?".
      * Templates kept outside a repo mean its token only needs Issues, so it can't read that repo's code.

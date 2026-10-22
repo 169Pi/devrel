@@ -21,7 +21,7 @@ import { createPeopleStore, GITHUB_LOGIN, normalizeLogin } from './people.js';
 import { DRAFT_ACTION, DRAFT_BLOCK, draftFailedMessage, draftingMessage, draftMessage } from './draft-message.js';
 import { createProgress, startTicker, statusLine } from './progress.js';
 import { createRepos } from './repos.js';
-import { looksLikeIssue, markdownToMrkdwn, raiserOf, threadTranscript } from './slack-text.js';
+import { asksAboutIssues, looksLikeIssue, markdownToMrkdwn, peopleAskedAbout, raiserOf, threadTranscript } from './slack-text.js';
 import { findTemplate, renderIssue, validateAnswers } from './templates.js';
 
 const config = loadConfig();
@@ -434,6 +434,29 @@ async function postThreadDraft(client, logger, { channel, ts, threadTs, message,
   })();
 }
 
+/**
+ * Issue counts for the people a question names: Slack mentions (through their linked GitHub account),
+ * typed GitHub usernames, and the asker for "my issues". At most three people.
+ */
+async function peopleStats(client, visible, text, askerId) {
+  const asked = peopleAskedAbout(text);
+  const slackIds = [...asked.slack, ...(asked.me ? [askerId] : [])];
+  const fromSlack = await Promise.all(
+    [...new Set(slackIds)].map(async (id) => ({ login: people.githubFor(id), name: await displayName(client, id).catch(() => null), id })),
+  );
+  const seen = new Set();
+  const wanted = [...fromSlack, ...asked.github.map((login) => ({ login, name: null }))]
+    .filter((p) => !p.login || !seen.has(p.login.toLowerCase()) && seen.add(p.login.toLowerCase()))
+    .slice(0, 3);
+  return Promise.all(
+    wanted.map(async (p) => {
+      if (!p.login) return { name: p.name ?? 'Someone', unlinked: true };
+      const stats = await Promise.all(visible.map((r) => repos.personStats(r.repo, p.login)));
+      return { login: p.login, name: p.name, stats: stats.filter(Boolean) };
+    }),
+  );
+}
+
 /** Where to post the eventual issue card: the thread for channels, the DM itself for DMs. */
 const originFor = ({ channel, ts, thread, dm }) => (dm ? { channel, thread: thread ?? undefined } : { channel, thread: thread ?? ts });
 
@@ -459,8 +482,9 @@ async function handleConversation({ client, logger, event, text, isDm }) {
   const publicly = (payload) => client.chat.postMessage({ channel, thread_ts: isDm ? (thread ?? undefined) : (thread ?? ts), ...payload });
 
   // A bare "@Alpieca" in a thread means "turn this thread into an issue"; elsewhere it's a hello.
-  // A screenshot or recording on its own is feedback too.
-  const wantsIssue = looksLikeIssue(text) || (!text && thread && !isDm) || Boolean(event.files?.length);
+  // A screenshot or recording is feedback too, unless the words ask about issues ("how many are open?").
+  const wantsIssue =
+    !asksAboutIssues(text) && (looksLikeIssue(text) || (!text && thread && !isDm) || Boolean(event.files?.length));
   const all = await templatesFor(client, event.user);
   const where = repoList(repoNames(all));
   if (/^(help|hi|hello|hey)?$/i.test(text) && !wantsIssue) {
@@ -496,10 +520,11 @@ async function handleConversation({ client, logger, event, text, isDm }) {
   try {
     // Guests only hear about public repos.
     const visible = await reposFor(client, event.user);
-    const [{ feedback: conversation }, issues, stats] = await Promise.all([
+    const [{ feedback: conversation }, issues, stats, people] = await Promise.all([
       conversationFeedback(client, logger, { channel, ts, threadTs: thread }),
       Promise.all(visible.map((r) => r.github.recentIssues().catch(() => []))).then((lists) => lists.flat()),
       Promise.all(visible.map((r) => repos.stats(r.repo))).then((all) => all.filter(Boolean)),
+      peopleStats(client, visible, text, event.user),
     ]);
     progress.phase = 'thinking';
     const reply = await alpie.answer({
@@ -509,6 +534,7 @@ async function handleConversation({ client, logger, event, text, isDm }) {
       templates: all,
       issues,
       stats,
+      people,
       access: repos.access(visible),
       asker: asker.reason === 'guest' ? 'guest' : 'member',
       onProgress: (p) => Object.assign(progress, p),

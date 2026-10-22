@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { buildAnswerMessages, createAlpie, keepKnownLinks, parseDraft, stripReasoning } from '../src/alpie.js';
-import { looksLikeIssue, markdownToMrkdwn, raiserOf } from '../src/slack-text.js';
+import { asksAboutIssues, looksLikeIssue, markdownToMrkdwn, peopleAskedAbout, raiserOf } from '../src/slack-text.js';
 
 // What Alpie actually sends: plain-text reasoning closed by </think>, with no opening tag.
 const REAL_SHAPE = `Alright, let's tackle this. The schema is {"template_id": ...} and I'll pick merch.
@@ -156,7 +156,7 @@ test('answer prompt carries exact repo stats and what Alpieca can access', () =>
   assert.match(user.content, /pull requests: unknown open/, "counts the token can't read are unknown, not 0");
   assert.match(user.content, /- 169Pi\/app \(private\): issues only/);
   assert.match(user.content, /full workspace member/);
-  assert.match(user.content, /Recently updated issues \(a sample/);
+  assert.match(user.content, /Open issues \(0 shown/);
 });
 
 test("repo stats are cached, and a repo GitHub won't count is left out", async () => {
@@ -181,4 +181,72 @@ test("repo stats are cached, and a repo GitHub won't count is left out", async (
     repos.access().map((a) => [a.repo, a.issuesOnly]),
     [['o/main', false], ['o/feedback', true]],
   );
+});
+
+test('questions about issues are answered, not drafted, even with a greeting or no question mark', () => {
+  // Both of these were drafted as Product Feedback issues in Slack.
+  const asked = [
+    'Hey, how many open issues by @kindavishal',
+    'total number of issue which is raised here i want list here',
+    'how many bugs are open?',
+    'show me the issues assigned to <@U123>',
+    'list all open issues',
+    'what are my open issues',
+  ];
+  for (const t of asked) {
+    assert.ok(asksAboutIssues(t), t);
+    assert.ok(!looksLikeIssue(t), t);
+  }
+  // Problems and explicit requests still draft.
+  for (const t of ['the list view is broken', 'the login screen freezes when I tap it', 'can you raise this as an issue?', 'file this as a bug please']) {
+    assert.ok(looksLikeIssue(t), t);
+    assert.ok(!asksAboutIssues(t), t);
+  }
+  // A word or two is too little to draft from: Alpie asks what they need instead.
+  for (const t of ['issues', 'merch']) assert.ok(!looksLikeIssue(t), t);
+});
+
+test('questions name people by Slack mention, typed GitHub username or "my"', () => {
+  assert.deepEqual(peopleAskedAbout('Hey, how many open issues by @kindavishal'), { slack: [], github: ['kindavishal'], me: false });
+  assert.deepEqual(peopleAskedAbout('issues assigned to <@U123|priya> and <@U456>?'), { slack: ['U123', 'U456'], github: [], me: false });
+  assert.equal(peopleAskedAbout('what are my open issues').me, true);
+  assert.deepEqual(peopleAskedAbout('mail me at a@b.com').github, [], 'emails are not usernames');
+});
+
+test('answer prompt lists a person\'s issues, says who is unlinked, and asks when unclear', async () => {
+  const [system, user] = buildAnswerMessages({
+    repos: ['169Pi/devrel'],
+    conversation: 'Vishal: how many open issues by @kindavishal',
+    people: [
+      {
+        login: 'kindavishal',
+        name: 'Vishal',
+        stats: [{ repo: '169Pi/devrel', login: 'kindavishal', openOpened: 1, allOpened: 4, openAssigned: 2, openMentioned: 3, openInvolved: 3, openIssues: [{ number: 9, title: 'Hoodie', url: 'https://github.com/169Pi/devrel/issues/9' }] }],
+      },
+      { name: 'Garg', unlinked: true },
+      { login: 'nobody-here', stats: [] },
+    ],
+  });
+  assert.match(system.content, /If you can't tell what they want, don't guess and don't draft anything/);
+  assert.match(user.content, /@kindavishal \(Vishal\) in 169Pi\/devrel: 1 open issues they opened on GitHub \(4 ever\), 2 open assigned to them, 3 open that mention them/);
+  assert.match(user.content, /#9 Hoodie https:\/\/github\.com\/169Pi\/devrel\/issues\/9/);
+  assert.match(user.content, /Garg hasn't linked a GitHub account/);
+  assert.match(user.content, /@nobody-here: GitHub has no user/);
+
+  // Links to a person's issues and the repo's issues page survive the link filter.
+  const fetchImpl = async () =>
+    new Response(
+      JSON.stringify({
+        choices: [{ message: { content: 'See https://github.com/169Pi/devrel/issues/9, https://github.com/169Pi/devrel/issues and https://github.com/169Pi/devrel/issues?q=is%3Aissue+is%3Aopen+involves%3Akindavishal' } }],
+      }),
+    );
+  const alpie = createAlpie({ apiKey: 'k', baseUrl: 'https://x', model: 'm', timeoutMs: 1000, fetchImpl });
+  const reply = await alpie.answer({
+    repos: ['169Pi/devrel'],
+    conversation: 'list them',
+    templates: [],
+    issues: [],
+    people: [{ login: 'kindavishal', stats: [{ repo: '169Pi/devrel', login: 'kindavishal', openIssues: [{ number: 9, url: 'https://github.com/169Pi/devrel/issues/9' }] }] }],
+  });
+  assert.doesNotMatch(reply, /link removed/);
 });

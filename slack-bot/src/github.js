@@ -58,20 +58,64 @@ export function createGitHub({ token, repo, ref, logger = console }) {
       }
     },
 
-    /** Recently updated issues (not PRs), as context for answering questions. */
-    async recentIssues(limit = 25) {
-      const { data } = await octokit.issues.listForRepo({ owner, repo: name, state: 'all', sort: 'updated', per_page: 50 });
-      return data
-        .filter((i) => !i.pull_request)
-        .slice(0, limit)
-        .map((i) => ({
-          repo,
-          number: i.number,
-          title: i.title,
-          state: i.state,
-          url: i.html_url,
-          labels: i.labels.map((l) => (typeof l === 'string' ? l : l.name)),
-        }));
+    /** Open issues (not PRs), most recently updated first, then the most recently closed: context for answers. */
+    async recentIssues(limit = 30, closedLimit = 10) {
+      const list = (state, n) =>
+        octokit.issues
+          .listForRepo({ owner, repo: name, state, sort: 'updated', per_page: 50 })
+          .then(({ data }) => data.filter((i) => !i.pull_request).slice(0, n));
+      const [open, closed] = await Promise.all([list('open', limit), list('closed', closedLimit)]);
+      return [...open, ...closed].map((i) => ({
+        repo,
+        number: i.number,
+        title: i.title,
+        state: i.state,
+        url: i.html_url,
+        labels: i.labels.map((l) => (typeof l === 'string' ? l : l.name)),
+      }));
+    },
+
+    /**
+     * One person's issues, for "how many open issues by @vishal?". Issues raised from Slack are opened by
+     * the bot's account and @mention their reporter, so "mentioned" is how those are counted.
+     * Null if GitHub has no such user.
+     */
+    async personStats(login) {
+      const q = (rest) => `repo:${repo} is:issue ${rest}`;
+      const query = `query($opened: String!, $openedAll: String!, $assigned: String!, $mentioned: String!, $involved: String!) {
+        opened: search(type: ISSUE, query: $opened, first: 1) { issueCount }
+        openedAll: search(type: ISSUE, query: $openedAll, first: 1) { issueCount }
+        assigned: search(type: ISSUE, query: $assigned, first: 1) { issueCount }
+        mentioned: search(type: ISSUE, query: $mentioned, first: 1) { issueCount }
+        involved: search(type: ISSUE, query: $involved, first: 10) {
+          issueCount
+          nodes { ... on Issue { number title url state } }
+        }
+      }`;
+      let data;
+      try {
+        data = await octokit.graphql(query, {
+          opened: q(`is:open author:${login}`),
+          openedAll: q(`author:${login}`),
+          assigned: q(`is:open assignee:${login}`),
+          mentioned: q(`is:open mentions:${login}`),
+          involved: q(`is:open involves:${login}`),
+        });
+      } catch (err) {
+        // GitHub refuses to search for users who don't exist.
+        if (/cannot be searched|do not exist/i.test(err.message)) return null;
+        throw err;
+      }
+      return {
+        repo,
+        login,
+        openOpened: data.opened.issueCount,
+        allOpened: data.openedAll.issueCount,
+        openAssigned: data.assigned.issueCount,
+        openMentioned: data.mentioned.issueCount,
+        openInvolved: data.involved.issueCount,
+        openIssues: data.involved.nodes.map((i) => ({ repo, number: i.number, title: i.title, state: i.state.toLowerCase(), url: i.url, labels: [] })),
+      };
     },
 
     /**
