@@ -21,7 +21,18 @@ import { createPeopleStore, GITHUB_LOGIN, normalizeLogin } from './people.js';
 import { DRAFT_ACTION, DRAFT_BLOCK, draftFailedMessage, draftingMessage, draftMessage } from './draft-message.js';
 import { createProgress, startTicker, statusLine } from './progress.js';
 import { createRepos } from './repos.js';
-import { asksAboutIssues, looksLikeIssue, markdownToMrkdwn, peopleAskedAbout, raiserOf, threadTranscript } from './slack-text.js';
+import {
+  asksAboutIssues,
+  asksToRedraft,
+  isAcknowledgement,
+  latestDraft,
+  looksLikeIssue,
+  markdownToMrkdwn,
+  mentionsSomeone,
+  peopleAskedAbout,
+  raiserOf,
+  threadTranscript,
+} from './slack-text.js';
 import { findTemplate, renderIssue, validateAnswers } from './templates.js';
 
 const config = loadConfig();
@@ -61,7 +72,7 @@ async function displayName(client, userId) {
 }
 
 // The workspace Alpieca is installed in, filled in at startup from auth.test.
-const home = { teamId: null, enterpriseId: null };
+const home = { teamId: null, enterpriseId: null, botUserId: null };
 const access = async (client, userId) => accessFor(await userInfo(client, userId), home);
 const NOT_A_MEMBER = ':lock: Alpieca only works for members of this workspace.';
 
@@ -212,7 +223,7 @@ async function openIssueModal({ client, logger, triggerId, userId, query, origin
 }
 
 /** Reads a message (and its thread, if any) as a transcript for Alpie, plus a permalink, its files and who raised it. */
-async function conversationFeedback(client, logger, { channel, ts, threadTs, message }) {
+async function conversationFeedback(client, logger, { channel, ts, threadTs, message, keepOwn = false }) {
   const root = threadTs ?? (message?.reply_count ? ts : null);
   let messages = message ? [message] : [];
   if (root) {
@@ -227,6 +238,9 @@ async function conversationFeedback(client, logger, { channel, ts, threadTs, mes
     const history = await client.conversations.history({ channel, latest: ts, inclusive: true, limit: 1 }).catch(() => null);
     messages = history?.messages ?? [];
   }
+  // Drafts leave out Alpieca's own messages: an earlier draft's title would otherwise be copied into
+  // a redraft. Answers keep them, so follow-ups ("list them") make sense.
+  if (!keepOwn) messages = messages.filter((m) => !home.botUserId || m.user !== home.botUserId);
   const [feedback, permalink] = await Promise.all([
     threadTranscript(messages, { selectedTs: ts, resolveUser: (id) => displayName(client, id) }),
     publicPermalink(client, channel, ts),
@@ -379,10 +393,10 @@ const DRAFT_TTL_MS = 24 * 60 * 60_000;
 // Thread drafts already filed ("channel:ts" of the draft message -> issue URL), so two people can't file one twice.
 const filedDrafts = new Map();
 
-function startDraft(client, logger, { channel, ts, threadTs, message, userId }) {
+function startDraft(client, logger, { channel, ts, threadTs, message, userId, read }) {
   const key = `${channel}:${ts}`;
   const progress = createProgress();
-  const prep = conversationFeedback(client, logger, { channel, ts, threadTs, message });
+  const prep = read ? Promise.resolve(read) : conversationFeedback(client, logger, { channel, ts, threadTs, message });
   const draft = Promise.all([prep, templatesFor(client, userId)]).then(
     async ([{ feedback, files, raisedBy }, all]) => {
       const reporter = await displayName(client, raisedBy ?? userId);
@@ -393,10 +407,24 @@ function startDraft(client, logger, { channel, ts, threadTs, message, userId }) 
   // A failed draft isn't kept: the next click starts a fresh one.
   prep.catch(() => {});
   draft.catch(() => drafts.delete(key));
-  const entry = { prep, draft, progress, userId };
+  const entry = { prep, draft, progress, userId, feedback: null, done: false };
+  // What the draft was made from, so "Review and file" can tell when the thread has changed since.
+  prep.then((p) => (entry.feedback = p.feedback), () => {});
+  draft.then(() => (entry.done = true), () => {});
   drafts.set(key, entry);
   setTimeout(() => drafts.delete(key), DRAFT_TTL_MS).unref();
   return entry;
+}
+
+/** Swaps a redrafted draft into its message in the thread, unless someone filed it meanwhile. */
+function refreshThreadDraft(client, logger, { offer, entry, value }) {
+  Promise.all([entry.draft, entry.prep])
+    .then(([draft, prep]) => {
+      if (filedDrafts.has(`${offer.channel}:${offer.ts}`)) return;
+      const files = repos.get(draft.template.repo)?.linkFiles ? prep.files.length : 0;
+      return client.chat.update({ channel: offer.channel, ts: offer.ts, unfurl_links: false, ...draftMessage(draft, { value, raisedBy: prep.raisedBy, files }) });
+    })
+    .catch((err) => logger.warn(`Couldn't update the thread's draft: ${err.data?.error ?? err.message}`));
 }
 
 /**
@@ -434,6 +462,98 @@ async function postThreadDraft(client, logger, { channel, ts, threadTs, message,
   })();
 }
 
+/** Drafts a thread again into its existing draft message, so the thread still has just one draft. */
+function redraftInto(client, logger, { channel, old, userId, privately }) {
+  const ref = JSON.parse(old.value);
+  privately({ text: ':llama: Drafting it again from the thread as it reads now. The draft above will update in a few seconds.' });
+  const replace = (payload) => client.chat.update({ channel, ts: old.ts, ...payload });
+  return postThreadDraft(client, logger, { channel: ref.channel, ts: ref.ts, threadTs: ref.thread ?? ref.ts, userId, value: old.value, post: replace }).catch((err) =>
+    logger.warn(`Couldn't redraft in ${channel}: ${err.data?.error ?? err.message}`),
+  );
+}
+
+/** Alpieca's dedicated channels (SLACK_HOME_CHANNELS), where every message is for it. */
+const isHomeChannel = (channel) => config.slack.homeChannels.includes(channel);
+
+// Threads Alpieca has posted in ("channel:thread ts" -> { engaged, at }). Replies there reach it
+// without an @mention. A "yes" is kept for a day; a "no" is checked again after a minute. After a
+// restart, the thread itself says whether Alpieca is in it, so nothing is lost.
+const engagedThreads = new Map();
+const ENGAGED_MAX = 5000;
+
+function markEngaged(channel, thread) {
+  engagedThreads.delete(`${channel}:${thread}`);
+  engagedThreads.set(`${channel}:${thread}`, { engaged: true, at: Date.now() });
+  if (engagedThreads.size > ENGAGED_MAX) engagedThreads.delete(engagedThreads.keys().next().value);
+}
+
+async function isEngaged(client, logger, channel, thread) {
+  const key = `${channel}:${thread}`;
+  const hit = engagedThreads.get(key);
+  if (hit && Date.now() - hit.at < (hit.engaged ? DRAFT_TTL_MS : 60_000)) return hit.engaged;
+  const res = await client.conversations.replies({ channel, ts: thread, limit: 200 }).catch((err) => {
+    logger.warn(`Couldn't read thread ${key} (${err.data?.error ?? err.message})`);
+    return null;
+  });
+  const engaged = Boolean(res?.messages?.some((m) => m.user === home.botUserId));
+  if (engaged) markEngaged(channel, thread);
+  else engagedThreads.set(key, { engaged, at: Date.now() });
+  return engaged;
+}
+
+/**
+ * Handles a message in a thread Alpieca is part of. Returns "done" when it's been dealt with,
+ * "answer" when Alpie should answer it, or "default" to carry on as for any @mention.
+ * - Thanks and acknowledgements get only the 🥧.
+ * - More detail or a correction redrafts the thread's unfiled draft in place.
+ * - Something unrelated is pointed to a new message or a DM, to keep the thread on its topic.
+ */
+async function routeThreadReply(client, logger, { event, text, channel, thread, privately, followUp }) {
+  if (isAcknowledgement(text)) return 'done';
+  const old = await findThreadDraft(client, logger, { channel, thread });
+  let intent;
+  if (!text || event.files?.length || asksToRedraft(text)) intent = 'update';
+  else {
+    // The whole thread, Alpieca's own replies included, so the classifier knows what it's about.
+    const { feedback: conversation } = await conversationFeedback(client, logger, { channel, ts: event.ts, threadTs: thread, keepOwn: true });
+    intent = await alpie.classifyFollowUp({ conversation, hasDraft: Boolean(old) }).catch((err) => {
+      logger.warn(`Couldn't sort a thread reply: ${err.message}`);
+      return 'question';
+    });
+  }
+  logger.info(`Thread reply in ${channel}:${thread} is ${intent}${old ? ' (draft open)' : ''}`);
+  if (intent === 'ack') return 'done';
+  if (intent === 'unrelated') {
+    await privately({
+      text: isHomeChannel(channel)
+      ? `:llama: That sounds separate from this thread, so let's keep this one on its topic. Post it as a new message in <#${channel}>, or DM me, and I'll pick it up there.`
+      : `:llama: That sounds separate from this thread, so let's keep this one on its topic. Ask me in a new message in <#${channel}> with <@${home.botUserId}>, or DM me, and I'll pick it up there.`,
+    });
+    return 'done';
+  }
+  if (intent === 'update' && old) {
+    await redraftInto(client, logger, { channel, old, userId: event.user, privately });
+    return 'done';
+  }
+  if (intent === 'question') return 'answer';
+  // More detail with no draft to update (say, it was already filed): answered, unless someone
+  // @mentioned Alpieca, which can still start a draft ("@Alpieca" alone drafts the thread).
+  return followUp ? 'answer' : 'default';
+}
+
+/** The unfiled draft Alpieca last posted in this thread (or, in a DM, among recent messages), if any. */
+async function findThreadDraft(client, logger, { channel, thread, isDm }) {
+  if (!thread && !isDm) return null;
+  const res = await (thread
+    ? client.conversations.replies({ channel, ts: thread, limit: 200 })
+    : client.conversations.history({ channel, limit: 20 })
+  ).catch((err) => {
+    logger.warn(`Couldn't look for a draft to redo (${err.data?.error ?? err.message})`);
+    return null;
+  });
+  return latestDraft(res?.messages, { botUserId: home.botUserId, block: DRAFT_BLOCK, action: DRAFT_ACTION.pick });
+}
+
 /**
  * Issue counts for the people a question names: Slack mentions (through their linked GitHub account),
  * typed GitHub usernames, and the asker for "my issues". At most three people.
@@ -464,7 +584,7 @@ const originFor = ({ channel, ts, thread, dm }) => (dm ? { channel, thread: thre
  * Handles a mention or DM: issue-like messages get a (private) offer to draft, with drafting already
  * under way; anything else is answered by Alpie, with a button to turn it into an issue after all.
  */
-async function handleConversation({ client, logger, event, text, isDm }) {
+async function handleConversation({ client, logger, event, text, isDm, followUp = false, passive = followUp }) {
   const asker = await access(client, event.user);
   if (!asker.member) {
     logger.info(`Ignoring message from ${event.user}: not a member of this workspace`);
@@ -479,16 +599,50 @@ async function handleConversation({ client, logger, event, text, isDm }) {
       ? client.chat.postMessage({ channel, thread_ts: thread ?? undefined, ...payload })
       : client.chat.postEphemeral({ channel, user: event.user, thread_ts: thread ?? undefined, ...payload })
     ).catch((err) => logger.warn(`Couldn't reply: ${err.data?.error ?? err.message}`));
-  const publicly = (payload) => client.chat.postMessage({ channel, thread_ts: isDm ? (thread ?? undefined) : (thread ?? ts), ...payload });
+  const publicly = async (payload) => {
+    const res = await client.chat.postMessage({ channel, thread_ts: isDm ? (thread ?? undefined) : (thread ?? ts), ...payload });
+    // From now on, replies in this thread reach Alpieca without an @mention.
+    if (!isDm) markEngaged(channel, thread ?? ts);
+    return res;
+  };
+
+  // In channels, a 🥧 on each message Alpieca reads shows it was heard.
+  if (!isDm) {
+    client.reactions.add({ channel, timestamp: ts, name: 'pie' }).catch((err) => {
+      if (err.data?.error !== 'already_reacted') logger.warn(`Couldn't react: ${err.data?.error ?? err.message}`);
+    });
+  }
+
+  // Messages that weren't addressed to Alpieca (in its home channel, or replies in its threads) that only
+  // say thanks get just the 🥧.
+  if (passive && isAcknowledgement(text)) return;
+
+  // In a thread Alpieca is already part of, work out what the message is for before anything else:
+  // more detail for the draft, a question, something unrelated, or just a thank-you.
+  let answerOnly = followUp;
+  if (thread && !isDm && alpie && (followUp || (await isEngaged(client, logger, channel, thread)))) {
+    const routed = await routeThreadReply(client, logger, { event, text, channel, thread, privately, followUp });
+    if (routed === 'done') return;
+    answerOnly = routed === 'answer';
+  }
 
   // A bare "@Alpieca" in a thread means "turn this thread into an issue"; elsewhere it's a hello.
   // A screenshot or recording is feedback too, unless the words ask about issues ("how many are open?").
+  // Replies that come without an @mention are only ever answered: they never start a new draft.
   const wantsIssue =
-    !asksAboutIssues(text) && (looksLikeIssue(text) || (!text && thread && !isDm) || Boolean(event.files?.length));
+    !answerOnly &&
+    !asksAboutIssues(text) &&
+    (looksLikeIssue(text) || (!text && thread && !isDm) || Boolean(event.files?.length));
   const all = await templatesFor(client, event.user);
   const where = repoList(repoNames(all));
   if (/^(help|hi|hello|hey)?$/i.test(text) && !wantsIssue) {
     return privately({ text: `:llama: Hi! Ask me about ${where} issues, or tell me about a bug, some feedback or an idea and I'll help you raise it.\n\n${helpText(all)}` });
+  }
+
+  // "I updated my message, redraft": draft the thread again into its existing draft, so there's still one.
+  if (wantsIssue && alpie && asksToRedraft(text)) {
+    const old = await findThreadDraft(client, logger, { channel, thread, isDm });
+    if (old) return redraftInto(client, logger, { channel, old, userId: event.user, privately });
   }
 
   if (wantsIssue) {
@@ -521,7 +675,7 @@ async function handleConversation({ client, logger, event, text, isDm }) {
     // Guests only hear about public repos.
     const visible = await reposFor(client, event.user);
     const [{ feedback: conversation }, issues, stats, people] = await Promise.all([
-      conversationFeedback(client, logger, { channel, ts, threadTs: thread }),
+      conversationFeedback(client, logger, { channel, ts, threadTs: thread, keepOwn: true }),
       Promise.all(visible.map((r) => r.github.recentIssues().catch(() => []))).then((lists) => lists.flat()),
       Promise.all(visible.map((r) => repos.stats(r.repo))).then((all) => all.filter(Boolean)),
       peopleStats(client, visible, text, event.user),
@@ -572,11 +726,28 @@ app.event('app_mention', async ({ event, client, logger, context }) => {
 });
 
 app.message(async ({ message, client, logger, context }) => {
-  // Only messages people send to Alpieca directly (with or without files); mentions in channels
-  // arrive as app_mention.
-  if (message.channel_type !== 'im' || (message.subtype && message.subtype !== 'file_share') || message.bot_id) return;
-  const text = (message.text ?? '').replaceAll(`<@${context.botUserId}>`, '').trim();
-  await handleConversation({ client, logger, event: message, text, isDm: true });
+  if ((message.subtype && message.subtype !== 'file_share' && message.subtype !== 'thread_broadcast') || message.bot_id) return;
+  const raw = message.text ?? '';
+  // Messages people send to Alpieca directly (with or without files).
+  if (message.channel_type === 'im') {
+    if (message.subtype === 'thread_broadcast') return;
+    return handleConversation({ client, logger, event: message, text: raw.replaceAll(`<@${context.botUserId}>`, '').trim(), isDm: true });
+  }
+  // Messages that @mention Alpieca arrive as app_mention instead.
+  if (raw.includes(`<@${context.botUserId}>`)) return;
+  // Messages addressed to a teammate ("@Priya can you check?") are left to them.
+  if (mentionsSomeone(raw)) return;
+  const reply = message.thread_ts && message.thread_ts !== message.ts;
+  const engaged = reply && (await isEngaged(client, logger, message.channel, message.thread_ts));
+  const text = raw.trim();
+  // In Alpieca's home channel every message is for it: new messages and replies in threads it isn't in
+  // yet are handled like an @mention.
+  if (isHomeChannel(message.channel) && !engaged) {
+    return handleConversation({ client, logger, event: message, text, isDm: false, passive: true });
+  }
+  // Elsewhere, only replies in threads Alpieca is part of. They never start a new draft on their own.
+  if (!engaged) return;
+  await handleConversation({ client, logger, event: message, text, isDm: false, followUp: true });
 });
 
 /** The thread draft message a button was clicked on, which becomes the issue's card once filed. */
@@ -592,11 +763,22 @@ app.action(DRAFT_ACTION.review, async ({ ack, body, action, client, respond, log
   }
   const ref = JSON.parse(action.value);
   const { channel, ts, thread } = ref;
-  const entry = drafts.get(`${channel}:${ts}`);
+  let entry = drafts.get(`${channel}:${ts}`);
   const { view } = await client.views.open({ trigger_id: body.trigger_id, view: draftingView('this conversation', entry?.progress) });
   // The draft doesn't depend on who opens it, except that guests can't see drafts for private repos.
-  const reuse = entry && (entry.userId === body.user.id || !(await isGuest(client, body.user.id)));
+  const reuse = !entry || entry.userId === body.user.id || !(await isGuest(client, body.user.id));
+  const offer = offerOf(body, action);
   try {
+    // A finished (or forgotten) draft is checked against the thread as it reads now. If anyone edited,
+    // deleted or added a message since, it's drafted again, and the draft in the thread is updated too.
+    if (reuse && (!entry || entry.done)) {
+      const read = await conversationFeedback(client, logger, { channel, ts, threadTs: thread ?? ts });
+      if (!entry || read.feedback !== entry.feedback) {
+        if (entry) logger.info(`Thread ${channel}:${thread ?? ts} changed since it was drafted; drafting it again`);
+        entry = startDraft(client, logger, { channel, ts, threadTs: thread ?? ts, userId: body.user.id, read });
+        if (offer) refreshThreadDraft(client, logger, { offer, entry, value: action.value });
+      }
+    }
     const { feedback, permalink, files, raisedBy } = await ((reuse && entry.prep) || conversationFeedback(client, logger, { channel, ts, threadTs: thread ?? ts }));
     await draftIntoView({
       client,
@@ -610,7 +792,7 @@ app.action(DRAFT_ACTION.review, async ({ ack, body, action, client, respond, log
       progress: reuse ? entry.progress : undefined,
       files,
       raisedBy,
-      offer: offerOf(body, action),
+      offer,
       what: 'this conversation',
     });
   } catch (err) {
@@ -971,7 +1153,7 @@ app.error(async (err) => {
 });
 
 const identity = await app.client.auth.test();
-Object.assign(home, { teamId: identity.team_id, enterpriseId: identity.enterprise_id ?? null });
+Object.assign(home, { teamId: identity.team_id, enterpriseId: identity.enterprise_id ?? null, botUserId: identity.user_id });
 await repos.start();
 await app.start();
 console.log(

@@ -41,7 +41,20 @@ flowchart LR
 
 ### Drafts in the thread
 
-When you @mention Alpieca about something to raise, or use *Turn into GitHub issue* on a message, it replies in the thread, where everyone can see it. The reply shows Alpie drafting, then the draft's title, tagged for whoever raised it. The rest of the draft stays in the form until someone opens it. Anyone in the thread can click **Review and file** to open the full form, and closing the form loses nothing: the draft stays in the thread, and the button reopens the same draft for up to a day (after that, or after a restart, it drafts again). **Pick another template** redrafts the thread against a template you choose. If Alpie fails, the message offers **Try again**.
+When you @mention Alpieca about something to raise, or use *Turn into GitHub issue* on a message, it replies in the thread, where everyone can see it. The reply shows Alpie drafting, then the draft's title, tagged for whoever raised it. The rest of the draft stays in the form until someone opens it. Anyone in the thread can click **Review and file** to open the full form, and closing the form loses nothing: the draft stays in the thread, and the button reopens the same draft for up to a day. If anyone has edited, deleted or added a message in the thread since the draft was made (or a day has passed, or the bot restarted), it drafts the thread again first, and the draft in the thread updates to match. **Pick another template** redrafts the thread against a template you choose. If Alpie fails, the message offers **Try again**.
+
+### Talking to Alpieca in a thread
+
+Once Alpieca has posted in a thread, it reads every reply there, so nobody has to @mention it again. It reacts with 🥧 to each message it reads, then:
+
+- **More detail or a correction** ("also make it purple", "actually it's on Android") redrafts the thread, updating the existing draft in place. So does asking for it: "redraft", "try again", "I updated my message". Each redraft reads the whole thread as it is now, edits included.
+- **A question** about the thread, its draft or the repos' issues gets an answer in the thread.
+- **Something unrelated** gets a private note asking them to start a new message with @Alpieca, or to DM it, so the thread stays on its topic.
+- **Thanks and acknowledgements** ("thanks!", "looks good 👍") get only the 🥧.
+
+**In Alpieca's own channel** (`SLACK_HOME_CHANNELS`), every message is for it, no @mention needed: new messages and replies in any thread are handled as if they @mentioned Alpieca, each with a 🥧. Invite Alpieca to the channel first.
+
+A reply that @mentions a teammate, a user group, @here or @channel is left to them: Alpieca doesn't react or reply. If it @mentions Alpieca too, Alpieca responds as usual. Alpie sorts each reply using the whole thread, and Alpieca reads the thread itself each time, so nothing is lost after a restart. Replies without an @mention never start a new draft; only an @mention can. Alpie's own drafts never feed into a redraft, so an old title can't creep back in.
 
 When someone files it, the draft message turns into the issue's **card**, so the thread has one message per issue and the same draft can't be filed twice. Issues filed another way post their card where you raised them: the channel, the thread, or your DM. Every card also goes to a team channel if you've configured one.
 
@@ -212,6 +225,7 @@ Invite the bot to that channel. Set the bot's `SLACK_NOTIFY_CHANNEL` to the same
 | `SLACK_COMMAND` | | Defaults to `/alpieca`. Must match the manifest. |
 | `SLACK_NOTIFY_CHANNEL` | | Channel ID that also gets every new issue card. |
 | `SLACK_TRIAGE_USERS` | | Comma-separated Slack user IDs allowed to triage. Defaults to all full members. |
+| `SLACK_HOME_CHANNELS` | | Comma-separated channel IDs where Alpieca answers every message without an @mention. Defaults to `C0C507GN03A`, 169Pi's Alpieca channel. Set it empty to turn this off. |
 | `DATA_DIR` | | Where Slack-to-GitHub username links are stored. Defaults to `~/.alpieca`. Keep it on persistent storage. |
 | `TEMPLATE_DIR`, `TEMPLATE_CACHE_SECONDS` | | Read templates from disk instead of GitHub, and how long to cache them. Defaults: GitHub, 300 s. |
 | `FEEDBACK_REPO` | | `owner/repo` that product feedback is filed into. See [Product feedback](#product-feedback). |

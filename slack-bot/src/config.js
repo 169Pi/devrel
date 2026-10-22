@@ -20,6 +20,10 @@ export function loadConfig(env = process.env) {
   if (mention && !GITHUB_MENTION.test(mention)) {
     throw new Error(`FEEDBACK_GITHUB_MENTION must be a GitHub @user or @org/team, got "${mention}"`);
   }
+  // Alpieca's own channels, where it answers every message without an @mention. Set it empty to turn this off.
+  const homeChannels = (env.SLACK_HOME_CHANNELS ?? 'C0C507GN03A').split(',').map((s) => s.trim()).filter(Boolean);
+  const badChannel = homeChannels.find((id) => !/^[CG][A-Z0-9]+$/.test(id));
+  if (badChannel) throw new Error(`SLACK_HOME_CHANNELS must be channel IDs (C…), got "${badChannel}"`);
   const slackMention = env.FEEDBACK_SLACK_MENTION?.trim() || null;
   if (slackMention && !/^[SUW][A-Z0-9]+$/.test(slackMention)) {
     throw new Error(`FEEDBACK_SLACK_MENTION must be a Slack user group (S…) or user (U…) ID, got "${slackMention}"`);
@@ -36,6 +40,7 @@ export function loadConfig(env = process.env) {
       notifyChannel: env.SLACK_NOTIFY_CHANNEL || null,
       // Slack user IDs allowed to use the triage buttons (close, label, assign…). Empty = everyone.
       triageUsers: (env.SLACK_TRIAGE_USERS || '').split(',').map((s) => s.trim()).filter(Boolean),
+      homeChannels,
     },
     github: {
       token: env.GITHUB_TOKEN,

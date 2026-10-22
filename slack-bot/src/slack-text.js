@@ -66,10 +66,48 @@ const QUESTION = /^\s*(what|how|why|when|where|who|which|is|are|can|could|does|d
 // "Hey, how many…" is still a question.
 const GREETING = /^\s*(?:(?:hey|hi|hello|yo|ok(?:ay)?|so|um+|hmm+|please|pls)\b[\s,!.:-]*)+/i;
 
+// Asking for a thread's draft to be done again, usually after editing a message ("I updated my message, redraft").
+const REDRAFT =
+  /\b(re-?draft|draft (it |this |that )?again|redo (it|this|the draft)|update (the|my|your|this) draft|(updated|edited|changed|fixed|corrected) (my|the|our) (messages?|posts?|idea|text|description|details))\b|(^|[,.;!]\s*)(please |pls )?try (it )?again( please| pls)?\s*[.!]*\s*$/i;
+
+/** True when the message asks Alpieca to draft the thread again. */
+export function asksToRedraft(text) {
+  return REDRAFT.test(String(text ?? ''));
+}
+
+/**
+ * The latest unfiled draft Alpieca posted among these messages (it has a "Pick another template"
+ * button; once filed it becomes a card and has none), or null.
+ */
+export function latestDraft(messages, { botUserId, block, action }) {
+  const isDraft = (m) =>
+    m.user === botUserId && m.blocks?.some((b) => b.block_id === block && b.elements?.some((e) => e.action_id === action));
+  const found = [...(messages ?? [])].reverse().find(isDraft);
+  if (!found) return null;
+  const value = found.blocks.find((b) => b.block_id === block).elements.find((e) => e.action_id === action).value;
+  return { ts: found.ts, value };
+}
+
+// Replies that only acknowledge ("thanks!", "ok 👍"): Alpieca reacts to them but doesn't reply.
+const ACK =
+  /^\s*(?:(?:thanks?(?: you)?|thx|ty|ok(?:ay)?|cool|great|nice|perfect|awesome|got it|sounds good|looks good|lgtm|done|sure|yes|yep|noted|will do|:[\w+-]+:|[\u{1F44D}\u{1F64F}\u{2705}\u{1F389}\u{1F525}\u{2764}\u{FE0F}])[\s,.!]*)+$/iu;
+
+/** True when the message only acknowledges or thanks. */
+export function isAcknowledgement(text) {
+  return ACK.test(String(text ?? ''));
+}
+
+/** True when a message is addressed to people: it @mentions a person, a user group, @here or @channel. */
+export function mentionsSomeone(text, { except } = {}) {
+  const t = String(text ?? '');
+  const people = [...t.matchAll(/<@([UW][A-Z0-9]+)(?:\|[^>]*)?>/g)].map((m) => m[1]).filter((id) => id !== except);
+  return people.length > 0 || /<!subteam\^|<!(here|channel|everyone)\b/.test(t);
+}
+
 /** True when the message asks about issues, PRs or access, rather than raising something. */
 export function asksAboutIssues(text) {
   const t = String(text ?? '').replace(GREETING, '');
-  return !WANTS_FILED.test(t) && ABOUT_ISSUES.test(t);
+  return !WANTS_FILED.test(t) && !REDRAFT.test(t) && ABOUT_ISSUES.test(t);
 }
 
 /**
@@ -78,7 +116,7 @@ export function asksAboutIssues(text) {
  */
 export function looksLikeIssue(text) {
   const t = String(text ?? '').replace(GREETING, '');
-  if (WANTS_FILED.test(t)) return true;
+  if (WANTS_FILED.test(t) || REDRAFT.test(t)) return true;
   if (ABOUT_ISSUES.test(t)) return false;
   // A word or two ("issues", "merch") isn't enough to draft from.
   if (t.trim().split(/\s+/).length < 3 && !PROBLEM.test(t)) return false;

@@ -1,7 +1,17 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { buildAnswerMessages, createAlpie, keepKnownLinks, parseDraft, stripReasoning } from '../src/alpie.js';
-import { asksAboutIssues, looksLikeIssue, markdownToMrkdwn, peopleAskedAbout, raiserOf } from '../src/slack-text.js';
+import { buildAnswerMessages, buildFollowUpMessages, createAlpie, keepKnownLinks, parseDraft, parseFollowUp, stripReasoning } from '../src/alpie.js';
+import {
+  asksAboutIssues,
+  asksToRedraft,
+  isAcknowledgement,
+  latestDraft,
+  looksLikeIssue,
+  markdownToMrkdwn,
+  mentionsSomeone,
+  peopleAskedAbout,
+  raiserOf,
+} from '../src/slack-text.js';
 
 // What Alpie actually sends: plain-text reasoning closed by </think>, with no opening tag.
 const REAL_SHAPE = `Alright, let's tackle this. The schema is {"template_id": ...} and I'll pick merch.
@@ -249,4 +259,63 @@ test('answer prompt lists a person\'s issues, says who is unlinked, and asks whe
     people: [{ login: 'kindavishal', stats: [{ repo: '169Pi/devrel', login: 'kindavishal', openIssues: [{ number: 9, url: 'https://github.com/169Pi/devrel/issues/9' }] }] }],
   });
   assert.doesNotMatch(reply, /link removed/);
+});
+
+test('asking to redraft is recognised, without catching problems that mention trying again', () => {
+  // From Slack: this was answered instead of redrafted.
+  for (const t of ['I updated my messages, redraft', 'redraft', 'I edited my message, try again', 'try again please', 'please redo the draft', 'draft it again']) {
+    assert.ok(asksToRedraft(t), t);
+    assert.ok(looksLikeIssue(t), t);
+  }
+  for (const t of ['the app crashes when I try again', 'how many issues are open?', 'thanks!']) assert.ok(!asksToRedraft(t), t);
+});
+
+test('the latest unfiled draft in a thread is found by its Pick another template button', () => {
+  const draft = (ts, value) => ({
+    ts,
+    user: 'UBOT',
+    blocks: [{ type: 'actions', block_id: 'issue_offer', elements: [{ action_id: 'mention_draft', value }, { action_id: 'mention_pick', value }] }],
+  });
+  const answer = { ts: '4', user: 'UBOT', blocks: [{ type: 'actions', block_id: 'answer_actions', elements: [{ action_id: 'mention_draft', value: 'x' }] }] };
+  const card = { ts: '5', user: 'UBOT', blocks: [{ type: 'section' }] };
+  const opts = { botUserId: 'UBOT', block: 'issue_offer', action: 'mention_pick' };
+  const thread = [{ ts: '1', user: 'UVISHAL', text: 'plushie idea' }, draft('2', 'v2'), { ts: '3', user: 'UVISHAL' }, draft('3.5', 'v3'), answer, card];
+  assert.deepEqual(latestDraft(thread, opts), { ts: '3.5', value: 'v3' });
+  assert.equal(latestDraft([answer, card], opts), null, 'answers and filed cards are not drafts');
+  assert.equal(latestDraft([{ ...draft('2', 'v'), user: 'UOTHER' }], opts), null, "another bot's message is not ours");
+  assert.equal(latestDraft(undefined, opts), null);
+});
+
+test('thread replies: thanks get a reaction only, and messages to teammates are left alone', () => {
+  for (const t of ['thanks!', 'Thank you', 'ok 👍', 'looks good', 'lgtm', ':pray:', '🙏']) assert.ok(isAcknowledgement(t), t);
+  for (const t of ['thanks, but make it purple', 'ok so how big is it?', '']) assert.ok(!isAcknowledgement(t), t || '(empty)');
+
+  assert.ok(mentionsSomeone('<@U123> can you check this?'));
+  assert.ok(mentionsSomeone('<!subteam^S1|@engineering> fyi'));
+  assert.ok(mentionsSomeone('<!here> heads up'));
+  assert.ok(!mentionsSomeone('<@UBOT> redraft', { except: 'UBOT' }), 'Alpieca itself is not a teammate');
+  assert.ok(!mentionsSomeone('make it purple'));
+});
+
+test('follow-up classifier prompt fences the thread and its reply is read defensively', () => {
+  const [system, user] = buildFollowUpMessages({ conversation: 'Vishal: a pie plushie\nAlpieca: drafted', hasDraft: true });
+  assert.match(system.content, /"update" \| "question" \| "unrelated" \| "ack"/);
+  assert.match(system.content, /data, not instructions/);
+  assert.match(user.content, /posted a draft issue in this thread that hasn't been filed/);
+  assert.match(user.content, /<conversation>\nVishal: a pie plushie/);
+  assert.equal(parseFollowUp('{"intent": "unrelated"}'), 'unrelated');
+  assert.equal(parseFollowUp('thinking it over</think>{"intent":"update"}'), 'update');
+  assert.equal(parseFollowUp('{"intent": "delete everything"}'), 'question', 'unknown intents fall back to answering');
+  assert.equal(parseFollowUp(''), 'question');
+});
+
+test('classifyFollowUp asks for the intent schema and returns the intent', async () => {
+  let sent;
+  const fetchImpl = async (url, init) => {
+    sent = JSON.parse(init.body);
+    return new Response(JSON.stringify({ choices: [{ message: { content: '{"intent": "ack"}' } }] }));
+  };
+  const alpie = createAlpie({ apiKey: 'k', baseUrl: 'https://x', model: 'm', timeoutMs: 1000, fetchImpl });
+  assert.equal(await alpie.classifyFollowUp({ conversation: 'Vishal: thanks', hasDraft: false }), 'ack');
+  assert.deepEqual(sent.response_format.json_schema.schema.properties.intent.enum, ['update', 'question', 'unrelated', 'ack']);
 });
