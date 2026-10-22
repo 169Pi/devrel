@@ -399,10 +399,13 @@ function toConfirm(template, answers) {
   return unknown.length ? `- Still to confirm with the reporter: ${unknown.join(', ')}.` : '';
 }
 
+// Alpie ends an answer with this line when the message looks like something to file; the bot swaps it for a button.
+export const OFFER_DRAFT = '[offer-draft]';
+
 const ANSWER_PROMPT = `You are Alpieca 🦙, 169Pi's Slack assistant for the GitHub {repos}. You run on 169Pi's {model} model. If asked which model you are, say exactly that. People @mention you or DM you with questions, or with bugs, ideas and requests they want to raise as GitHub issues.
 
 What you can do in Slack:
-- Raise issues and product feedback from the repos' issue templates: "/alpieca", "/alpieca <describe it>", the "Turn into GitHub issue" message shortcut, or the "Draft an issue" button under your replies. Alpie drafts the issue and the person reviews it before it's filed.
+- Raise issues and product feedback from the repos' issue templates: "/alpieca", "/alpieca <describe it>", the "Turn into GitHub issue" message shortcut, or the "Draft an issue" button under replies about something to raise. Alpie drafts the issue and the person reviews it before it's filed.
 - Post issue cards with buttons to assign, label, comment on and close issues.
 - "/alpieca github <username>" links someone's GitHub account so issues @mention them.
 
@@ -419,7 +422,7 @@ Rules:
 - When asked for a list, list the matching issues below (number, title, link). If there are more than you were given, say how many in total and link the repo's issues page.
 - If you have no data for what they asked (for example a date range other than the last 7 days, or pull request titles), say so and say what you can tell them instead.
 - If you can't tell what they want, don't guess and don't draft anything. In one or two lines, say what you can do (answer questions about issues, pull requests and access, or draft an issue from a bug, idea or feedback) and ask what would help: which repo, whose issues, or what went wrong.
-- If the person is describing a bug, idea or request, say you can turn it into an issue with the "Draft an issue" button.
+- Decide whether the last message is something the person would likely want filed as an issue: a bug or problem they ran into, an idea, or a request, in their own words. Questions about existing issues, pull requests, counts, people, access or how to use you are not. Only when it is, offer in one short sentence to draft it, and end your reply with the line ${OFFER_DRAFT}, which adds a "Draft an issue" button. Otherwise never mention drafting, and never write ${OFFER_DRAFT}.
 - Answer what was asked, without notes about access, filing or buttons unless they ask. (The Slack triage buttons only work on issue cards for repos you file into: never on pull requests or questions-only repos.)
 - Reply in plain Markdown. No JSON, no headings.`;
 
@@ -547,6 +550,27 @@ export function parseFollowUp(reply) {
   const intent = (text.match(/"intent"\s*:\s*"(\w+)"/) ?? text.match(/\b(update|question|unrelated|ack)\b/))?.[1];
   return FOLLOW_UP_INTENTS.includes(intent) ? intent : 'question';
 }
+
+/**
+ * Takes the draft offer marker out of an answer. `offerDraft` says whether it was there. A marker
+ * only half-written by a stream ("[offer-d") is hidden too.
+ */
+export function splitDraftOffer(text) {
+  const marker = /\[\s*offer[-_ ]draft\s*\]/gi;
+  const marked = marker.test(text);
+  const clean = text
+    .replace(marker, '')
+    .replace(/\[(o(f(f(e(r([-_ ](d(r(a(ft?)?)?)?)?)?)?)?)?)?)?$/i, '')
+    .trimEnd();
+  // The button follows what the reply says: Alpie Seed sometimes offers to draft without the marker,
+  // or adds the marker to a reply that never offers.
+  const offers = DRAFT_OFFER.test(clean) || (marked && /\bdraft/i.test(clean));
+  return { text: clean, offerDraft: offers };
+}
+
+// "Would you like me to draft an issue?", "If you'd like, I can draft it", "Want me to file this?"
+const DRAFT_OFFER =
+  /\b(would you like|do you want|want me to|shall i|should i|if you'?d like|happy to|i'?d be glad to)\b[^.?!\n]{0,40}\b(draft|file|raise|turn)\b[^.?!\n]{0,40}\b(issue|ticket|it|this|that)\b/i;
 
 /** Removes links Alpie made up: anything not in the issue list, the repo, or the conversation itself. */
 export function keepKnownLinks(text, allowed) {
@@ -735,7 +759,10 @@ export function createAlpie({ apiKey, baseUrl, model, thinking = false, timeoutM
       return parseFollowUp(await complete(buildFollowUpMessages({ conversation, hasDraft }), { schema }));
     },
 
-    /** Answers a question in a Slack conversation, grounded in the templates and recent issues. */
+    /**
+     * Answers a question in a Slack conversation, grounded in the templates and recent issues.
+     * `offerDraft` is true when Alpie thinks the message is something the person would want filed.
+     */
     async answer({ repo, repos = [repo], conversation, templates, issues, pulls = [], stats, access, asker, people = [], onProgress }) {
       const allowed = [
         ...repos.flatMap((r) => [`https://github.com/${r}`, `https://github.com/${r}/issues`, `https://github.com/${r}/pulls`]),
@@ -745,10 +772,11 @@ export function createAlpie({ apiKey, baseUrl, model, thinking = false, timeoutM
         ...(conversation.match(URL) ?? []),
       ];
       // Partial answers shown while streaming get the same link filtering as the final one.
-      const progress = onProgress && ((p) => onProgress({ ...p, output: keepKnownLinks(p.output, allowed) }));
+      const progress = onProgress && ((p) => onProgress({ ...p, output: splitDraftOffer(keepKnownLinks(p.output, allowed)).text }));
       const reply = stripReasoning(await complete(buildAnswerMessages({ repos, model, conversation, templates, issues, pulls, stats, access, asker, people }), { onProgress: progress }));
-      if (!reply) throw new AlpieError('Alpie returned an empty answer');
-      return keepKnownLinks(reply, allowed).slice(0, 3500);
+      const { text, offerDraft } = splitDraftOffer(reply);
+      if (!text) throw new AlpieError('Alpie returned an empty answer');
+      return { text: keepKnownLinks(text, allowed).slice(0, 3500), offerDraft };
     },
   };
 }
