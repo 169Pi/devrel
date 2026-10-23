@@ -3,6 +3,9 @@ import { App } from '@slack/bolt';
 import { accessFor, isPublicChannel } from './access.js';
 import { AlpieError, createAlpie } from './alpie.js';
 import { loadConfig } from './config.js';
+import { fileIssue } from './filing.js';
+import { createGitHub } from './github.js';
+import { createGitHubApp, SignInError } from './github-app.js';
 import { ACTION, escapeSlack, issueCard, parseIssueRef } from './issue-card.js';
 import { downloadSlackFile, filesIn, imagesForAlpie, slackFile } from './media.js';
 import {
@@ -35,8 +38,31 @@ import {
   threadTranscript,
 } from './slack-text.js';
 import { findTemplate, renderIssue, validateAnswers } from './templates.js';
+import { createUserTokenStore } from './user-tokens.js';
 
 const config = loadConfig();
+const githubApp = config.github.app ? createGitHubApp(config.github.app) : null;
+// The account the bot's issues are opened as: the App's "slug[bot]" when it has one.
+const botLogin = githubApp?.canAct
+  ? `${await githubApp.slug().catch((err) => {
+      throw new Error(`Couldn't sign in as GitHub App ${config.github.app.appId}: ${err.message}. Check GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY.`);
+    })}[bot]`
+  : null;
+/**
+ * With a GitHub App, each repo gets its own installation token, scoped to that repo. A repo whose
+ * templates live elsewhere only gets Issues, so the bot can't read its code.
+ */
+const withAppToken = (d) =>
+  githubApp?.canAct
+    ? {
+        ...d,
+        token: githubApp.installationToken({
+          repo: d.repo,
+          permissions: d.templatePath && !d.watchOnly ? { issues: 'write', metadata: 'read' } : undefined,
+        }),
+        owner: botLogin,
+      }
+    : d;
 // The main repo, plus the product feedback repo if there is one. Picking a template picks the repo.
 const repos = createRepos(
   [
@@ -45,11 +71,19 @@ const repos = createRepos(
     ...(config.feedback ? [{ ...config.feedback, linkFiles: true }] : []),
     // Repos Alpieca answers questions about but never files into, like Good First Alpie's.
     ...config.github.watched.map((w) => ({ ...w, watchOnly: true })),
-  ],
+  ].map(withAppToken),
   { token: config.github.token, ttlMs: config.templateTtlMs },
 );
 const alpie = config.alpie ? createAlpie(config.alpie) : null;
 const people = await createPeopleStore(path.join(config.dataDir, 'people.json'));
+// People signed in to GitHub, whose issues are opened by their own account.
+const signIn = githubApp?.canSignIn
+  ? await createUserTokenStore(path.join(config.dataDir, 'github-sign-ins.json'), {
+      secret: config.github.encryptionKey,
+      refresh: (token) => githubApp.refresh(token),
+    })
+  : null;
+const signInCommand = signIn ? `${config.slack.command} github login` : null;
 
 const app = new App({
   token: config.slack.token,
@@ -111,6 +145,68 @@ async function checkGithubLogin(value) {
   return { login };
 }
 
+/** What `/alpieca github` says about someone's GitHub account. */
+function githubStatus(userId) {
+  const cmd = config.slack.command;
+  const signedInAs = signIn?.loginFor(userId);
+  if (signedInAs) return `You're signed in to GitHub as *@${signedInAs}*: issues you file are opened by you. Sign out with \`${cmd} github logout\`.`;
+  const linked = people.githubFor(userId);
+  const how = signIn ? ` Sign in with \`${signInCommand}\` to open issues as yourself.` : '';
+  return linked
+    ? `You're linked to GitHub as *@${linked}*, so issues @mention you, but Alpieca opens them.${how}`
+    : `Link your GitHub account with \`${cmd} github <username>\`.${how}`;
+}
+
+// Device-flow sign-ins waiting for someone to approve them on GitHub, by Slack user. A new one replaces the old.
+const pendingSignIns = new Map();
+
+/**
+ * Signs someone in to GitHub with the device flow: they enter a code on github.com, so Alpieca needs
+ * no public URL. Waits in the background (up to 15 minutes) and updates the message when it's done.
+ */
+async function startSignIn({ userId, respond, logger }) {
+  pendingSignIns.get(userId)?.abort();
+  const flow = await githubApp.startSignIn();
+  const pending = new AbortController();
+  pendingSignIns.set(userId, pending);
+  const minutes = Math.round((flow.expiresAt - Date.now()) / 60_000);
+  const message = (text, blocks) => respond({ response_type: 'ephemeral', replace_original: true, text, ...(blocks ? { blocks } : {}) });
+  await message(`Enter ${flow.userCode} at ${flow.verificationUri} to sign in to GitHub.`, [
+    {
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text:
+          `:key: To sign in to GitHub, open the link and enter *\`${flow.userCode}\`*. The code works for ${minutes} minutes.\n` +
+          "Once you're in, issues you file are opened by your GitHub account, marked _with Alpieca_, and you can file into private repos you have access to.",
+      },
+      accessory: { type: 'button', action_id: 'github_sign_in', text: { type: 'plain_text', text: 'Sign in on GitHub' }, url: flow.verificationUri, style: 'primary' },
+    },
+  ]);
+
+  (async () => {
+    try {
+      const tokens = await githubApp.finishSignIn(flow, { signal: pending.signal });
+      const login = await githubApp.whoAmI(tokens.accessToken);
+      await signIn.save(userId, login, tokens);
+      await people.link(userId, login);
+      await message(`:white_check_mark: Signed in to GitHub as *@${login}*. Issues you file from now on are opened by you, marked _with Alpieca_.`);
+    } catch (err) {
+      if (pending.signal.aborted) return;
+      const why =
+        err instanceof SignInError && err.code === 'access_denied'
+          ? 'You cancelled it on GitHub.'
+          : err instanceof SignInError && err.code === 'expired_token'
+            ? 'The code expired.'
+            : `GitHub said: ${err.message}`;
+      logger.warn(`GitHub sign-in for ${userId} didn't finish: ${err.message}`);
+      await message(`:x: Not signed in to GitHub. ${why} Run \`${signInCommand}\` to try again.`);
+    } finally {
+      if (pendingSignIns.get(userId) === pending) pendingSignIns.delete(userId);
+    }
+  })().catch((err) => logger.warn(`Couldn't update the sign-in message: ${err.message}`));
+}
+
 /** The "Alpie is drafting…" modal. With progress, it's one frame of the loading animation. */
 const draftingView = (what, progress = createProgress(), tick = 0) =>
   statusView(
@@ -123,6 +219,8 @@ function formFor(template, userId, authorName, opts = {}) {
   return formView(template, {
     authorName,
     githubLogin: people.githubFor(userId),
+    signedInAs: signIn?.loginFor(userId),
+    signInCommand,
     publicRepo: dest.public,
     linkFiles: Boolean(dest.linkFiles),
     mention: dest.mention,
@@ -278,6 +376,7 @@ function helpText(all) {
       `Or just describe it: \`${cmd} the docs search returns nothing for "quantization"\`, and Alpie drafts the issue for you. ` +
         'You can also @mention Alpieca or DM it with a question or an idea, or use *More actions → Turn into GitHub issue* on any message.',
     `Link your GitHub account with \`${cmd} github <username>\` so issues @mention you and *Assign to me* works.`,
+    signIn && `Sign in with \`${signInCommand}\` so the issues you file are opened by you on GitHub, and so you can file into private repos you have access to.`,
   ]
     .filter(Boolean)
     .join('\n');
@@ -292,16 +391,28 @@ app.command(config.slack.command, async ({ ack, command, client, respond, logger
     if (query === 'help') return await ephemeral(helpText(await templatesFor(client, command.user_id)));
     const linkMatch = query.match(/^github(?:\s+(\S+))?$/i);
     if (linkMatch) {
-      if (!linkMatch[1]) {
-        const current = people.githubFor(command.user_id);
+      const arg = linkMatch[1]?.toLowerCase();
+      if (signIn && (arg === 'login' || arg === 'signin')) return await startSignIn({ userId: command.user_id, respond, logger });
+      if (signIn && (arg === 'logout' || arg === 'signout')) {
+        const was = signIn.loginFor(command.user_id);
+        await signIn.remove(command.user_id);
         return await ephemeral(
-          current ? `You're linked to GitHub as *@${current}*.` : `Link your GitHub account with \`${config.slack.command} github <username>\`.`,
+          was
+            ? `Signed you out of GitHub. Your issues are opened by Alpieca again, still crediting you as *@${was}*. ` +
+                'To revoke Alpieca entirely, go to <https://github.com/settings/apps/authorizations|GitHub → Applications>.'
+            : "You weren't signed in to GitHub.",
         );
       }
+      if (!linkMatch[1]) return await ephemeral(githubStatus(command.user_id));
+      const signedInAs = signIn?.loginFor(command.user_id);
+      if (signedInAs) return await ephemeral(`You're signed in to GitHub as *@${signedInAs}*. Sign out with \`${config.slack.command} github logout\` to link a different account.`);
       const { login, error } = await checkGithubLogin(linkMatch[1]);
       if (error) return await ephemeral(`:warning: ${error}`);
       await people.link(command.user_id, login);
-      return await ephemeral(`:white_check_mark: Linked you to GitHub as *@${login}*.`);
+      return await ephemeral(
+        `:white_check_mark: Linked you to GitHub as *@${login}*.` +
+          (signIn ? ` Issues you file are opened by Alpieca and @mention you. To open them as yourself, sign in with \`${signInCommand}\`.` : ''),
+      );
     }
     await openIssueModal({
       client,
@@ -892,6 +1003,23 @@ app.view(CALLBACK.pick, async ({ ack, body, view, client, logger }) => {
   });
 });
 
+/** For someone signed in to GitHub whose account can't see the repo. */
+function noAccessMessage(dest, login) {
+  const org = dest.repo.split('/')[0];
+  const ask = config.github.accessRequestUrl
+    ? `<${config.github.accessRequestUrl}|Request access>, then file it again.`
+    : `Ask an admin of the *${org}* GitHub organisation to add you, then file it again.`;
+  return (
+    `:lock: Your GitHub account *@${login}* doesn't have access to *${dest.repo}*, so you can't report issues there yet. ${ask}\n` +
+    'Or ask a teammate who has access to raise it for you: they can use *More actions → Turn into GitHub issue* on your message, and the issue still credits you.'
+  );
+}
+
+/** For someone filing into a private repo without signing in (or whose sign-in lapsed). */
+const signInMessage = (dest, lapsed) =>
+  `:lock: *${dest.repo}* is private, so Alpieca has to check you have access. ${lapsed ? 'Your GitHub sign-in has lapsed. ' : ''}` +
+  `Sign in with \`${signInCommand}\`, then file it again.`;
+
 app.view(CALLBACK.form, async ({ ack, body, view, client, logger }) => {
   const { templateId, version, drafted, source, origin, raisedBy, offer } = JSON.parse(view.private_metadata || '{}');
   const template = await repos.template(templateId, version);
@@ -904,11 +1032,16 @@ app.view(CALLBACK.form, async ({ ack, body, view, client, logger }) => {
   const who = await access(client, userId);
   if (!who.member) errors.title = 'Alpieca only works for members of this workspace.';
   else if (who.reason === 'guest' && !dest.public) errors.title = `Guests can't file issues in ${dest.repo}.`;
+  // Only a sign-in tells us whether someone may see a private repo.
+  const signedInAs = signIn?.loginFor(userId);
+  if (!errors.title && signIn && !signedInAs && !dest.public) {
+    errors.title = `${dest.repo} is private. Sign in to GitHub with "${signInCommand}" first, so Alpieca can check you have access.`;
+  }
 
-  // Only hit GitHub to check the username when it differs from the one we already know.
+  // Signed in, their account is known. Otherwise only hit GitHub to check the username when it differs from the one we know.
   const typed = normalizeLogin(answers[GITHUB_LOGIN_BLOCK]);
-  let githubLogin = people.githubFor(userId);
-  if (typed.toLowerCase() !== githubLogin?.toLowerCase()) {
+  let githubLogin = signedInAs ?? people.githubFor(userId);
+  if (!signedInAs && typed.toLowerCase() !== githubLogin?.toLowerCase()) {
     const checked = await checkGithubLogin(typed);
     if (checked.error) errors[GITHUB_LOGIN_BLOCK] = checked.error;
     githubLogin = checked.login;
@@ -952,22 +1085,45 @@ app.view(CALLBACK.form, async ({ ack, body, view, client, logger }) => {
     mention: dest.mention,
   });
 
-  let created;
+  // Hands the drafted issue back so nothing typed in the modal is lost.
+  const returnAnswers = (why) =>
+    client.chat
+      .postMessage({ channel: userId, text: `${why} Here's what you wrote:\n*${issue.title}*\n\`\`\`${issue.body}\`\`\`` })
+      .catch((e) => logger.warn(e));
+
+  // Signed in, they open it themselves; otherwise the bot does. See filing.js.
+  let filed;
   try {
-    created = await dest.github.createIssue(issue);
+    const token = signedInAs ? await signIn.accessToken(userId) : null;
+    filed = await fileIssue({
+      dest,
+      issue,
+      user: token ? { login: signedInAs, token } : null,
+      signIn: Boolean(signIn),
+      asUser: (userToken) => createGitHub({ token: userToken, repo: dest.repo, logger }),
+      logger,
+    });
+    if (signedInAs && !token) filed.signedOut = true;
   } catch (err) {
     const reason = err.response?.data?.message ?? err.message;
     logger.error(`Couldn't create issue "${issue.title}": ${reason}`);
     if (offerKey) filedDrafts.delete(offerKey);
     await Promise.all([
       update('Issue not created', `:x: GitHub rejected the issue: ${reason}\nYour answers were sent to you in a DM so you don't lose them.`),
-      // Hand the drafted issue back so nothing typed in the modal is lost.
-      client.chat
-        .postMessage({ channel: userId, text: `:x: Couldn't create your issue (${reason}). Here's what you wrote:\n*${issue.title}*\n\`\`\`${issue.body}\`\`\`` })
-        .catch((e) => logger.warn(e)),
+      returnAnswers(`:x: Couldn't create your issue (${reason}).`),
     ]);
     return;
   }
+  if (filed.signedOut) {
+    await signIn.remove(userId).catch((err) => logger.warn(`Couldn't forget a lapsed GitHub sign-in: ${err.message}`));
+  }
+  if (filed.refused) {
+    if (offerKey) filedDrafts.delete(offerKey);
+    const why = filed.refused === 'no-access' ? noAccessMessage(dest, filed.login) : signInMessage(dest, filed.signedOut);
+    await Promise.all([update('Issue not created', `${why}\nYour answers were sent to you in a DM so you don't lose them.`), returnAnswers(why)]);
+    return;
+  }
+  const { created } = filed;
 
   if (offerKey) filedDrafts.set(offerKey, created.url);
   await people.link(userId, githubLogin).catch((err) => logger.warn(`Couldn't save GitHub username: ${err.message}`));
@@ -996,7 +1152,9 @@ app.view(CALLBACK.form, async ({ ack, body, view, client, logger }) => {
           },
         )
       : await postCard(client, logger, { origin, userId, card });
-    await update('Issue created', `:white_check_mark: Filed ${link} in *${dest.repo}* and posted it in ${posted.where}.`);
+    const as = filed.as === 'user' ? ` as *@${signedInAs}*` : '';
+    const lapsed = filed.signedOut ? `\n_Your GitHub sign-in had lapsed, so Alpieca opened it. Sign in again with \`${signInCommand}\`._` : '';
+    await update('Issue created', `:white_check_mark: Filed ${link} in *${dest.repo}*${as} and posted it in ${posted.where}.${lapsed}`);
   } catch (err) {
     logger.warn(`Couldn't post issue card: ${err.message}`);
     await update('Issue created', `:white_check_mark: Filed ${link} in *${dest.repo}*.`);
@@ -1054,6 +1212,7 @@ function triage(handler) {
 
 // The link button opens GitHub in the browser, but Slack still sends an action that must be acked.
 app.action('issue_view', async ({ ack }) => ack());
+app.action('github_sign_in', async ({ ack }) => ack());
 
 async function assignAndRefresh({ client, logger, userId, login, number, ref, ephemeral }) {
   const dest = repos.get(ref.repo);
@@ -1179,5 +1338,12 @@ await app.start();
 console.log(
   `Alpieca running (${config.slack.socketMode ? 'Socket Mode' : `HTTP on :${config.slack.port}`}), filing into ` +
     repos.describe() +
-    (alpie ? `, drafting with ${config.alpie.model}${config.alpie.thinking ? ' (reasoning on)' : ''}` : ', Alpie drafting off (no ALPIE_BASE_URL or ALPIE_API_KEY)'),
+    (alpie ? `, drafting with ${config.alpie.model}${config.alpie.thinking ? ' (reasoning on)' : ''}` : ', Alpie drafting off (no ALPIE_BASE_URL or ALPIE_API_KEY)') +
+    (signIn ? ', GitHub sign-in on' : ''),
 );
+if (!githubApp?.canAct) {
+  console.warn(
+    'Filing with GITHUB_TOKEN, so GitHub shows its owner as the author of every issue not filed by a signed-in person. ' +
+      'Set GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY to file as the GitHub App instead (see "GitHub App" in the README).',
+  );
+}

@@ -5,11 +5,21 @@ const REPO = /^[\w.-]+\/[\w.-]+$/;
 const GITHUB_MENTION = /^@[A-Za-z0-9-]+(\/[A-Za-z0-9_.-]+)?$/;
 
 export function loadConfig(env = process.env) {
-  const missing = ['SLACK_BOT_TOKEN', 'GITHUB_TOKEN'].filter((k) => !env[k]);
+  const missing = ['SLACK_BOT_TOKEN'].filter((k) => !env[k]);
+  // The bot acts on GitHub as its GitHub App, or failing that with a token.
+  const appId = env.GITHUB_APP_ID?.trim() || null;
+  const privateKey = env.GITHUB_APP_PRIVATE_KEY?.trim() || null;
+  if (Boolean(appId) !== Boolean(privateKey)) missing.push(appId ? 'GITHUB_APP_PRIVATE_KEY' : 'GITHUB_APP_ID');
+  else if (!appId && !env.GITHUB_TOKEN) missing.push('GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY (or GITHUB_TOKEN)');
+  // People sign in to GitHub through the App's device flow; their tokens are stored encrypted.
+  const clientId = env.GITHUB_APP_CLIENT_ID?.trim() || null;
+  const encryptionKey = env.TOKEN_ENCRYPTION_KEY?.trim() || null;
+  if (clientId && !encryptionKey) missing.push('TOKEN_ENCRYPTION_KEY (to store GitHub sign-ins)');
   if (!env.SLACK_APP_TOKEN && !env.SLACK_SIGNING_SECRET) {
     missing.push('SLACK_APP_TOKEN (Socket Mode) or SLACK_SIGNING_SECRET (HTTP mode)');
   }
   if (missing.length) throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
+  if (encryptionKey && encryptionKey.length < 32) throw new Error('TOKEN_ENCRYPTION_KEY must be at least 32 characters, e.g. from `openssl rand -base64 32`');
 
   const repo = env.GITHUB_REPO || '169Pi/devrel';
   if (!REPO.test(repo)) throw new Error(`GITHUB_REPO must look like owner/repo, got "${repo}"`);
@@ -55,7 +65,12 @@ export function loadConfig(env = process.env) {
       homeChannels,
     },
     github: {
-      token: env.GITHUB_TOKEN,
+      // Without a GitHub App, a token. Issues then show the token's owner as their author.
+      token: env.GITHUB_TOKEN || null,
+      app: appId || clientId ? { appId, privateKey, clientId, clientSecret: env.GITHUB_APP_CLIENT_SECRET?.trim() || null } : null,
+      encryptionKey,
+      // Shown to people who can't see a private repo, e.g. a form or channel where they ask for access.
+      accessRequestUrl: env.GITHUB_ACCESS_REQUEST_URL?.trim() || null,
       repo,
       ref: env.GITHUB_TEMPLATE_REF || undefined,
       watched,
@@ -66,7 +81,7 @@ export function loadConfig(env = process.env) {
       ? {
           repo: feedbackRepo,
           // A separate token keeps the main token's Contents access away from the feedback repo's
-          // code: this one only needs Issues.
+          // code: this one only needs Issues. With a GitHub App, its installation token is narrowed instead.
           token: env.FEEDBACK_GITHUB_TOKEN || null,
           mention: mention || null,
           slackMention,
