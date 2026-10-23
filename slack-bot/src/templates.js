@@ -216,7 +216,7 @@ export function renderIssue(template, answers, { reporter, githubLogin, filedBy,
   if (mention) parts.push(`cc ${mention}`);
   const person = (name, login) => [name?.replace(/[<>@]/g, '').trim(), login && `(@${login})`].filter(Boolean).join(' ');
   const footer = [
-    // @login notifies and subscribes the real reporter; the issue itself is opened by the bot's token.
+    // @login notifies and subscribes the real reporter, whether the issue is opened by them (signed in) or by the bot.
     (reporter || githubLogin) && `Raised from Slack by ${person(reporter, githubLogin)}`,
     filedBy && `filed by ${person(filedBy.name, filedBy.login)}`,
     drafted && 'drafted with Alpie',

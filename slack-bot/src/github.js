@@ -1,10 +1,22 @@
 import { Octokit } from '@octokit/rest';
 import { TEMPLATE_DIR, isTemplateFile, parseTemplates } from './templates.js';
 
+/** Octokit auth for a token that changes: GitHub App installation tokens expire every hour. */
+const refreshingToken = (getToken) => () => {
+  const auth = async () => ({ type: 'token', tokenType: 'installation', token: await getToken() });
+  auth.hook = async (request, route, parameters) => {
+    const endpoint = request.endpoint.merge(route, parameters);
+    endpoint.headers.authorization = `token ${await getToken()}`;
+    return request(endpoint);
+  };
+  return auth;
+};
+
+/** @param token  a token, or an async function returning one (a GitHub App installation token) */
 export function createGitHub({ token, repo, ref, logger = console }) {
   const [owner, name] = repo.split('/');
   const octokit = new Octokit({
-    auth: token,
+    ...(typeof token === 'function' ? { authStrategy: refreshingToken(token) } : { auth: token }),
     userAgent: 'alpieca-slack-bot',
     // 2022-11-28 (Octokit's default) now returns Deprecation headers.
     request: { headers: { 'X-GitHub-Api-Version': '2026-03-10' } },
@@ -40,6 +52,17 @@ export function createGitHub({ token, repo, ref, logger = console }) {
         return (await octokit.users.getAuthenticated()).data.login;
       } catch {
         return null;
+      }
+    },
+
+    /** Whether the token can see the repo. A person's sign-in can only see repos they have access to. */
+    async canRead() {
+      try {
+        await octokit.repos.get({ owner, repo: name });
+        return true;
+      } catch (err) {
+        if (err.status === 404 || err.status === 403) return false;
+        throw err;
       }
     },
 
@@ -90,8 +113,8 @@ export function createGitHub({ token, repo, ref, logger = console }) {
     },
 
     /**
-     * One person's issues, for "how many open issues by @vishal?". Issues raised from Slack are opened by
-     * the bot's account and @mention their reporter, so "mentioned" is how those are counted.
+     * One person's issues, for "how many open issues by @vishal?". Issues raised from Slack by someone who
+     * hasn't signed in are opened by the bot's account and @mention their reporter, so "mentioned" counts those.
      * Null if GitHub has no such user.
      */
     async personStats(login) {

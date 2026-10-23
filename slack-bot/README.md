@@ -9,9 +9,9 @@ It's built to be forked. Everything specific to us (the repo, the templates, the
 - **Forms built from your issue templates.** `/alpieca` reads `.github/ISSUE_TEMPLATE/*.md` straight from GitHub and turns each template into a Slack form. Edit a template and the form updates within minutes, no redeploy.
 - **Drafting with Alpie.** Describe the problem in your own words, @mention Alpieca in a thread, or use *Turn into GitHub issue* on any message. Alpie fills in the template from what was actually said, adds useful context for maintainers, and you review everything before it's filed.
 - **Product feedback, with screenshots.** Point Alpieca at a thread, or DM it a screenshot, and it drafts a structured feedback issue in a private product repo. Alpie reads the screenshots, the issue links to the files in Slack, and engineering is tagged. See [Product feedback](#product-feedback).
-- **Ask it things.** DM Alpieca or @mention it, in a channel or a thread, with a question: "are there any merch ideas filed already?", "how many issues are open?", "list the open issues", "how many open issues by @priya?", "what are my issues?", "how many PRs were merged?", "what do you have access to?". Alpie answers from the templates, the open issues and pull requests, exact counts fetched live from GitHub (open and closed issues and PRs, unassigned issues, the last week's activity, open issues and pull requests by label, and any person's issues), and a summary of which repos Alpieca can reach and what it can do in each. People can be named by Slack mention (if they've linked GitHub) or GitHub username. Questions are answered, never drafted as issues, and a message Alpie can't make sense of gets a short question back about what would help. Answers have a **Draft an issue from this** button only when Alpie judges the message to be something you'd want filed (a problem, an idea or a request) and offers to draft it. Plain questions get just the answer. It also answers about repos it watches but never files into, by what people call them: "how many Good First Alpie PRs are ready for review?" counts the `ready-for-review` pull requests on `169Pi/.github` (see `GITHUB_WATCH_REPOS`). Guests only hear about public repos.
+- **Ask it things.** DM Alpieca or @mention it, in a channel or a thread, with a question: "are there any merch ideas filed already?", "how many issues are open?", "list the open issues", "how many open issues by @priya?", "what are my issues?", "how many PRs were merged?", "what do you have access to?". Alpie answers from the templates, the open issues and pull requests, exact counts fetched live from GitHub (open and closed issues and PRs, unassigned issues, the last week's activity, open issues and pull requests by label, and any person's issues), and a summary of which repos Alpieca can reach and what it can do in each. People can be named by Slack mention (if they've linked GitHub) or GitHub username. Questions are answered, never drafted as issues, and a message Alpie can't make sense of gets a short question back about what would help. Answers have a **Draft an issue from this** button only when the message is a bug, a new Alpie showcase project, or an open request that still needs tracking, and Alpie offers to draft it. Questions about issues, pull requests, counts or access, and follow-ups like "what about PRs?", get just the answer, never an offer to file it. It also answers about repos it watches but never files into, by what people call them: "how many Good First Alpie PRs are ready for review?" counts the `ready-for-review` pull requests on `169Pi/.github` (see `GITHUB_WATCH_REPOS`). Guests only hear about public repos.
 - **Issue cards with triage buttons.** Every new issue, whether filed from Slack or opened on GitHub, appears in Slack as a card with **Assign to me**, **Label**, **Comment** and **Mark resolved/Reopen**.
-- **Credit for the reporter.** Issues credit whoever raised it in Slack, even when a teammate files it for them, and @mention their GitHub account. See [Who an issue is credited to](#who-an-issue-is-credited-to).
+- **Credit for the reporter.** Issues credit whoever raised it in Slack, even when a teammate files it for them, and @mention their GitHub account. People who sign in to GitHub from Slack open issues as themselves, marked *with Alpieca*. Everyone else's are opened by Alpieca's own GitHub App account. See [Who an issue is credited to](#who-an-issue-is-credited-to).
 
 ```mermaid
 flowchart LR
@@ -37,6 +37,7 @@ flowchart LR
 | **More actions → Turn into GitHub issue** on a message | Alpie drafts an issue from that message and its whole thread, and posts the draft in its thread. In a channel Alpieca isn't in, it opens the form instead. |
 | `@Alpieca` in a channel or thread, or a DM | Something to raise gets a draft posted in the thread, with **Review and file** and **Pick another template** buttons for anyone there; a question gets an answer in the thread. A bare `@Alpieca` in a thread means "turn this thread into an issue". A DM with just a screenshot or recording counts as something to raise. |
 | `/alpieca github <username>` | Link your GitHub account (you're also asked the first time you file). |
+| `/alpieca github login` | Sign in to GitHub, so the issues you file are opened by you (marked *with Alpieca*) and you can file into private repos you have access to. `/alpieca github logout` signs out, and `/alpieca github` shows your status. |
 | `/alpieca help` | Lists the templates and these options. |
 
 ### Drafts in the thread
@@ -85,7 +86,9 @@ The main repo works as before, and its issues never link Slack files.
 
 The repo must already exist with **Issues** turned on (*Settings → General → Features*).
 
-**1. A GitHub token for its issues.** Use a separate token, so the bot can't read the repo's code. Ideally create it from a dedicated bot account rather than a person's.
+**1. GitHub access for its issues.** With the [GitHub App](#2-github-app), install the App on the feedback repo too (*App settings → Install App → Configure → Repository access*). Alpieca asks for an Issues-only token for it, so the bot can't read the repo's code, and `FEEDBACK_GITHUB_TOKEN` isn't needed. Reporters need access to the repo on GitHub, because it's private.
+
+Without the App, use a separate token instead, so the bot can't read the repo's code. Create it from a dedicated bot account rather than a person's:
 1. Go to [github.com/settings/personal-access-tokens/new](https://github.com/settings/personal-access-tokens/new).
 2. **Token name:** `alpieca-feedback`. **Expiration:** your org's maximum, with a reminder to rotate it.
 3. **Resource owner:** the organization that owns the repo, e.g. `169Pi`.
@@ -97,7 +100,7 @@ The repo must already exist with **Issues** turned on (*Settings → General →
 The main `GITHUB_TOKEN` keeps its own access to the main repo, where the feedback template lives. It needs nothing on the feedback repo.
 
 **2. Make the `@169Pi/engineering` mention reach people.** GitHub only notifies people who can see the repo, and only lets an account mention a team it can see. So:
-1. The token's account must be a member of the org. Check at `github.com/orgs/169Pi/people`.
+1. The account that opens the issue must be able to see the team. A signed-in reporter in the org can. With a token, the token's account must be a member of the org: check at `github.com/orgs/169Pi/people`. With the App, file a test issue without signing in and check the team was notified.
 2. The team must have access to the feedback repo: in the repo, *Settings → Collaborators and teams → Add teams → engineering*, role *Triage* (lets them label, assign and close) or higher.
 3. The team must be *Visible* (*Organization → Teams → engineering → Settings*), not secret.
 
@@ -129,7 +132,20 @@ The issue is written back in the template's exact layout (same headings, bullets
 
 The **reporter** is whoever raised it in Slack: the author of the message used with *Turn into GitHub issue*, the person who started the thread when someone replies with a bare `@Alpieca`, or the person who DMed or @mentioned Alpieca with their own words. When a teammate files it for them, the form says so, and the issue footer reads *Raised from Slack by Priya (@priya) · filed by Vishal (@vishal)*. The card's headline and its *by @…* credit the reporter, using the GitHub account they linked with `/alpieca github <username>`. If they haven't linked one, the card names no GitHub account rather than the bot's.
 
-GitHub itself always shows the **token's owner** as an issue's author, because the bot creates issues with one token. If that token belongs to a person, every issue looks like it was opened by them. Create the tokens from a dedicated bot account (for example `169pi-bot`, a member of the org) instead. The startup log names the account each repo's issues are opened as, e.g. `169Pi/devrel as @169pi-bot`.
+The **author** GitHub shows depends on who files it:
+
+| Who files it | GitHub shows the author as | Private repos |
+| --- | --- | --- |
+| Someone signed in with `/alpieca github login` | **Them**, with GitHub's *with Alpieca* badge next to their name, so everyone can see the bot filed it on their behalf | Only if their GitHub account has access to the repo. If it doesn't, nothing is filed. They're told they don't have access, how to ask for it (`GITHUB_ACCESS_REQUEST_URL`), and that a teammate with access can raise it for them with *Turn into GitHub issue* |
+| Someone not signed in | **Alpieca's GitHub App**, e.g. `alpieca[bot]` | Not allowed: the form asks them to sign in first, because only a sign-in shows whether they have access |
+
+Either way the footer still credits the reporter and @mentions their GitHub account, so they get notifications. When a teammate files an issue for someone else, the teammate's sign-in is the one used.
+
+Signing in is different from `/alpieca github <username>`. Linking a username only says who to @mention, and Alpieca can't act as anyone that way. Signing in gives Alpieca a token that can only do what that person can do on GitHub. Tokens are stored encrypted with `TOKEN_ENCRYPTION_KEY` in `DATA_DIR/github-sign-ins.json` (mode `600`) and refreshed automatically. Use `/alpieca github` to see your status and `/alpieca github logout` to sign out. To revoke Alpieca's access entirely, go to [GitHub → Settings → Applications](https://github.com/settings/apps/authorizations).
+
+When someone opens an issue without triage access, GitHub drops its labels and assignees. The bot adds the template's labels and assignees back straight afterwards. If their sign-in has been revoked or has lapsed, it's forgotten: the issue goes in as if they had never signed in, and they're asked to sign in again.
+
+Without a GitHub App, Alpieca falls back to `GITHUB_TOKEN`, and GitHub shows that **token's owner** as the author of every issue. If that's a person's token, every issue looks like it was opened by them. The startup log names the account each repo's issues are opened as, e.g. `169Pi/devrel as @alpieca[bot]`, and it warns when it's using a token.
 
 ## Drafting with Alpie
 
@@ -157,13 +173,14 @@ The bot doesn't take Alpie's output on trust:
 
 ## Access and privacy
 
-Issues land in a **public** repo (and optionally a private feedback repo) under the bot's GitHub token, so access is deliberately narrow:
+Issues land in a **public** repo (and optionally a private feedback repo), opened by the bot's GitHub App or by the signed-in reporter, so access is deliberately narrow:
 
 - **Workspace members only.** People from other organizations (for example in Slack Connect channels) can't file issues, use Alpie, or press triage buttons. Messages from them are ignored.
 - **Triage buttons are for full members.** Guests can raise issues but can't assign, label, comment on or resolve them. Set `SLACK_TRIAGE_USERS` to limit triage to specific people.
-- **Private repos are for full members.** Guests can't file into a private repo, and Alpie's answers to guests only mention issues in public repos.
+- **Private repos are for full members with GitHub access.** Guests can't file into a private repo, and Alpie's answers to guests only mention issues in public repos. With GitHub sign-in set up, members can only file into a private repo once they've signed in, and only if their GitHub account can see it.
+- **A sign-in can't do more than its owner.** A signed-in person's token is limited to what both they and the App may do. It's stored encrypted and only used to open their issues.
 - **Files stay in Slack.** Feedback issues only link files that stay ticked in the form, and only workspace members can open those links. Nothing is copied to GitHub, and main-repo issues never link files.
-- **The feedback token can't read code.** It only has Issues access to the feedback repo.
+- **The feedback repo's token can't read code.** It only has Issues access to the feedback repo, whether it's the App's narrowed installation token or `FEEDBACK_GITHUB_TOKEN`.
 - **Private conversations stay private.** An issue drafted from a public channel links back to its source thread. Issues drafted from private channels and DMs don't include a link.
 - **Reporters see a warning.** Before filing a draft, the form reminds them the repo is public and that their name and GitHub username will appear on the issue.
 - **Content from GitHub is escaped.** Issue titles and bodies can't ping `@channel` or fake links in Slack.
@@ -185,12 +202,26 @@ At [api.slack.com/apps](https://api.slack.com/apps), choose **Create New App →
 
 Whenever the manifest's scopes or events change, paste it again and **Reinstall to Workspace**. Invite the bot to channels where you'll use it on threads (`/invite @Alpieca`).
 
-### 2. GitHub token
-Create a [fine-grained personal access token](https://github.com/settings/personal-access-tokens/new), or a GitHub App installation token, limited to your repo:
-- **Issues:** Read and write
-- **Contents:** Read-only
+### 2. GitHub App
+A GitHub App gives Alpieca its own GitHub identity (`alpieca[bot]`) and lets people sign in from Slack, so their issues are opened by them (see [Who an issue is credited to](#who-an-issue-is-credited-to)). Sign-in uses GitHub's device flow: Alpieca shows a code, and the person enters it on github.com. So it needs no public callback URL and works in Socket Mode.
 
-Issues are opened as the token's owner, so create the token from a dedicated bot account. A personal token makes every issue look like that person opened it (see [Who an issue is credited to](#who-an-issue-is-credited-to)). If the repo belongs to an organization, an org owner may need to approve the token. Until they do, it can read but not write.
+1. Go to *Organization settings → Developer settings → GitHub Apps → New GitHub App* (for 169Pi: `github.com/organizations/169Pi/settings/apps/new`).
+2. **Name:** `Alpieca`. Its slug becomes the bot's name, e.g. `alpieca[bot]`. **Homepage URL:** this repo.
+3. **Callback URL:** leave it empty. **Tick _Enable Device Flow_.** Leave *Expire user authorization tokens* ticked.
+4. **Webhook:** untick *Active*. Alpieca doesn't need GitHub's events.
+5. **Repository permissions:** *Issues: Read and write*, *Contents: Read-only* (to read the templates), *Pull requests: Read-only* (to answer questions about PRs), *Metadata: Read-only* (required). Leave everything else at *No access*.
+6. **Where can this GitHub App be installed?** *Only on this account*. **Create GitHub App.**
+7. On the App's page, note the **App ID** and **Client ID**, **Generate a new client secret**, and **Generate a private key** (a `.pem` file downloads).
+8. **Install App → 169Pi → Only select repositories** → every repo Alpieca files into or answers about: `169Pi/devrel`, `169Pi/app-alpie`, `169Pi/.github`.
+9. Set the settings (see [Hosting](#hosting) for Parameter Store):
+   - `GITHUB_APP_ID`: the App ID.
+   - `GITHUB_APP_PRIVATE_KEY`: the `.pem` file. Parameter Store and `deploy/alpieca-start` need it on one line, so store `base64 < alpieca.pem | tr -d '\n'` (a PEM with `\n` escapes works too, in `.env`).
+   - `GITHUB_APP_CLIENT_ID` and `GITHUB_APP_CLIENT_SECRET`: turn on sign-in. Without the secret, sign-ins can't be renewed and people have to sign in again every 8 hours.
+   - `TOKEN_ENCRYPTION_KEY`: from `openssl rand -base64 32`. Keep it safe and keep it the same: if it changes, everyone has to sign in again.
+   - Optionally `GITHUB_ACCESS_REQUEST_URL`: where people without access to a private repo can ask for it, such as a form or a Slack channel link.
+10. Remove `GITHUB_TOKEN` and `FEEDBACK_GITHUB_TOKEN`, which the App replaces, and restart. The startup log should end with `… filing into 169Pi/devrel as @alpieca[bot] … GitHub sign-in on`. Try `/alpieca github login` in Slack.
+
+**Without an App,** set `GITHUB_TOKEN` to a [fine-grained personal access token](https://github.com/settings/personal-access-tokens/new) limited to your repo, with *Issues: Read and write* and *Contents: Read-only*. Issues are then opened as the token's owner, so create it from a dedicated bot account, not a person's. If the repo belongs to an organization, an org owner may need to approve the token. Until they do, it can read but not write. You can still turn on sign-in with just `GITHUB_APP_CLIENT_ID`, `GITHUB_APP_CLIENT_SECRET` and `TOKEN_ENCRYPTION_KEY`, as long as the App is installed on the repos.
 
 ### 3. Alpie (optional)
 Set `ALPIE_BASE_URL=https://test.169pi.ai/v1` to use the hosted Alpie Seed 9B endpoint, which needs no key. For an endpoint that requires a key, also set `ALPIE_API_KEY`.
@@ -217,7 +248,11 @@ Invite the bot to that channel. Set the bot's `SLACK_NOTIFY_CHANNEL` to the same
 | `SLACK_BOT_TOKEN` | yes | Bot token (`xoxb-…`). |
 | `SLACK_APP_TOKEN` | for Socket Mode | App-level token (`xapp-…`) with `connections:write`. |
 | `SLACK_SIGNING_SECRET`, `PORT` | for HTTP mode | Use instead of `SLACK_APP_TOKEN` to receive events over HTTP at `/slack/events`. |
-| `GITHUB_TOKEN` | yes | Fine-grained token with Issues read/write and Contents read. |
+| `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY` | yes, or `GITHUB_TOKEN` | The [GitHub App](#2-github-app) the bot acts as. The key is a PEM, or a PEM base64-encoded on one line. |
+| `GITHUB_APP_CLIENT_ID`, `GITHUB_APP_CLIENT_SECRET` | | Turn on `/alpieca github login`, so people open issues as themselves. The secret lets sign-ins renew past 8 hours. |
+| `TOKEN_ENCRYPTION_KEY` | with sign-in | At least 32 characters (`openssl rand -base64 32`). Encrypts stored sign-ins. Changing it signs everyone out. |
+| `GITHUB_ACCESS_REQUEST_URL` | | Link shown to signed-in people whose GitHub account can't see a private repo, so they can ask for access. |
+| `GITHUB_TOKEN` | without an App | Fine-grained token with Issues read/write and Contents read. Issues show its owner as the author. Ignored when the App is set. |
 | `GITHUB_REPO` | | `owner/repo` to file into. Defaults to `169Pi/devrel`. |
 | `GITHUB_TEMPLATE_REF` | | Branch to read templates from. Defaults to the default branch. |
 | `ALPIE_BASE_URL`, `ALPIE_API_KEY` | | Setting either turns on drafting and answers. The URL defaults to `https://test.169pi.ai/v1`; the key is only sent if set. |
@@ -227,10 +262,10 @@ Invite the bot to that channel. Set the bot's `SLACK_NOTIFY_CHANNEL` to the same
 | `SLACK_TRIAGE_USERS` | | Comma-separated Slack user IDs allowed to triage. Defaults to all full members. |
 | `GITHUB_WATCH_REPOS` | | Comma-separated repos Alpieca answers questions about but never files into, as `owner/repo` or `owner/repo=What people call it`. Defaults to `169Pi/.github=Good First Alpie`, where Good First Alpie pull requests arrive. Set it empty to turn this off. |
 | `SLACK_HOME_CHANNELS` | | Comma-separated channel IDs where Alpieca answers every message without an @mention. Defaults to `C0C507GN03A`, 169Pi's Alpieca channel. Set it empty to turn this off. |
-| `DATA_DIR` | | Where Slack-to-GitHub username links are stored. Defaults to `~/.alpieca`. Keep it on persistent storage. |
+| `DATA_DIR` | | Where Slack-to-GitHub username links and encrypted GitHub sign-ins are stored. Defaults to `~/.alpieca`. Keep it on persistent storage. |
 | `TEMPLATE_DIR`, `TEMPLATE_CACHE_SECONDS` | | Read templates from disk instead of GitHub, and how long to cache them. Defaults: GitHub, 300 s. |
 | `FEEDBACK_REPO` | | `owner/repo` that product feedback is filed into. See [Product feedback](#product-feedback). |
-| `FEEDBACK_GITHUB_TOKEN` | | Token with Issues read/write on `FEEDBACK_REPO` only. Defaults to `GITHUB_TOKEN`. |
+| `FEEDBACK_GITHUB_TOKEN` | | Without an App: token with Issues read/write on `FEEDBACK_REPO` only. Defaults to `GITHUB_TOKEN`. Ignored when the App is set. |
 | `FEEDBACK_GITHUB_MENTION` | | Who feedback issues notify on GitHub. Defaults to `@169Pi/engineering`. Empty turns it off. |
 | `FEEDBACK_SLACK_MENTION` | | Slack user group (`S…`) or user (`U…`) ID to tag on feedback cards. |
 | `FEEDBACK_TEMPLATE_PATH`, `FEEDBACK_TEMPLATE_DIR` | | Where feedback templates come from: a folder in the main repo (default `slack-bot/feedback-templates`), or a folder on disk for development. |
@@ -240,7 +275,7 @@ Invite the bot to that channel. Set the bot's `SLACK_NOTIFY_CHANNEL` to the same
 Alpieca is one small Node.js process (about 100 MB of RAM). In Socket Mode it only makes **outbound** connections, so it needs **no public URL, inbound ports or load balancer**. Any always-on machine works: a small VM or VPS, a container platform, or a server you already have. Three things matter wherever you run it:
 
 - **Exactly one instance.** Two copies would split Slack's events between them.
-- **Persistent `DATA_DIR`.** It holds the Slack-to-GitHub username links.
+- **Persistent `DATA_DIR`.** It holds the Slack-to-GitHub username links and the encrypted GitHub sign-ins.
 - **Secrets as environment variables.** Inject them from your platform's secret store, or from a file only the service can read. Never bake them into an image.
 
 **Docker:**
@@ -256,7 +291,7 @@ docker run -d --name alpieca --restart unless-stopped --env-file .env -v alpieca
 - **To update the code,** `sudo -u alpieca git -C /opt/alpieca pull origin main`. Run `npm ci --omit=dev` in `slack-bot/` only if `package-lock.json` changed. Then restart.
 - **To list the settings** without their values: `aws ssm get-parameters-by-path --path /alpieca/ --query 'Parameters[].Name' --output text`.
 
-**Checking a deploy:** the last log line on startup says what's live, e.g. `Alpieca running (Socket Mode), filing into 169Pi/devrel as @169pi-bot and 169Pi/app-alpie (private) as @169pi-bot, drafting with alpie_9b`. The `as @…` account is the author GitHub shows on every issue. A repo shown as `(no access: …)` means its token can't read it, so filing there will fail. You can also ask the bot "which model are you?" in Slack.
+**Checking a deploy:** the last log line on startup says what's live, e.g. `Alpieca running (Socket Mode), filing into 169Pi/devrel as @alpieca[bot] and 169Pi/app-alpie (private) as @alpieca[bot], drafting with alpie_9b, GitHub sign-in on`. The `as @…` account is the author GitHub shows on issues filed by people who aren't signed in. A repo shown as `(no access: …)` means its token can't read it, so filing there will fail. You can also ask the bot "which model are you?" in Slack.
 
 ## Development
 

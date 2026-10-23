@@ -130,6 +130,8 @@ export function formView(
     banner,
     publicRepo,
     githubLogin,
+    signedInAs,
+    signInCommand,
     origin,
     linkFiles = false,
     attachments = [],
@@ -249,20 +251,31 @@ export function formView(
     blocks.push(notice(`:paperclip: Files from the conversation aren't added to *${template.repo ?? 'this repo'}* issues. Describe what they show.`));
   }
 
-  blocks.push(
-    { type: 'divider' },
-    input(
-      GITHUB_LOGIN_BLOCK,
-      'Your GitHub username',
-      {
-        type: 'plain_text_input',
-        max_length: 60,
-        placeholder: text('octocat'),
-        ...(githubLogin ? { initial_value: githubLogin } : {}),
-      },
-      { hint: "You're @mentioned on the issue so you get GitHub notifications. Alpieca remembers it for next time." },
-    ),
-  );
+  if (signedInAs) {
+    // Signed in, their own account opens the issue, so there's no username to ask for.
+    blocks.push(
+      { type: 'divider' },
+      notice(`:white_check_mark: Signed in to GitHub as *@${signedInAs}*: the issue is opened by you, marked _with Alpieca_.`),
+    );
+  } else {
+    blocks.push(
+      { type: 'divider' },
+      ...(publicRepo === false && signInCommand
+        ? [notice(`:lock: *${template.repo ?? 'This repo'}* is private. Sign in with \`${signInCommand}\` first, so Alpieca can check you have access.`)]
+        : []),
+      input(
+        GITHUB_LOGIN_BLOCK,
+        'Your GitHub username',
+        {
+          type: 'plain_text_input',
+          max_length: 60,
+          placeholder: text('octocat'),
+          ...(githubLogin ? { initial_value: githubLogin } : {}),
+        },
+        { hint: "You're @mentioned on the issue so you get GitHub notifications. Alpieca remembers it for next time." },
+      ),
+    );
+  }
 
   return {
     type: 'modal',

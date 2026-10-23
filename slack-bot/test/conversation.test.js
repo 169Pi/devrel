@@ -400,10 +400,32 @@ test('the Draft an issue button is offered only when Alpie marks the message as 
 
   const [system] = buildAnswerMessages({ repo: '169Pi/devrel', conversation: 'x' });
   assert.match(system.content, /end your reply with the line \[offer-draft\]/);
-  assert.match(system.content, /Questions about existing issues, pull requests, counts, people, access or how to use you are not/);
+  assert.match(system.content, /a new Alpie showcase project they built/);
+  assert.match(system.content, /Never offer to turn your own answer or a summary into an issue/);
 
   const fetchImpl = async () => new Response(JSON.stringify({ choices: [{ message: { content: `The login screen freezing sounds like a bug. I can draft it.\n${OFFER_DRAFT}` } }] }));
   const alpie = createAlpie({ apiKey: 'k', baseUrl: 'https://x', model: 'm', timeoutMs: 1000, fetchImpl });
   const reply = await alpie.answer({ repos: ['169Pi/devrel'], conversation: 'the login screen freezes', templates: [], issues: [] });
   assert.deepEqual(reply, { text: 'The login screen freezing sounds like a bug. I can draft it.', offerDraft: true });
+});
+
+test('questions about counts and PRs never get an offer to draft, even when Alpie makes one', async () => {
+  const { mayNeedIssue } = await import('../src/slack-text.js');
+  // From Slack: Alpie offered to draft an issue from a count of open issues and PRs.
+  assert.equal(mayNeedIssue('can you update the total number of issues currently across all the connected repos?'), false);
+  assert.equal(mayNeedIssue('What about PRs?'), false);
+  assert.equal(mayNeedIssue('how many PRs are open?'), false);
+  assert.equal(mayNeedIssue('the login screen freezes on android'), true, 'a bug');
+  assert.equal(mayNeedIssue('I built a recipe app with Alpie, want to showcase it'), true, 'a showcase project');
+  assert.equal(mayNeedIssue('we need the docs page fixed'), true, 'an open request');
+
+  const [system] = buildAnswerMessages({ repo: '169Pi/devrel', canOfferDraft: false, conversation: 'x' });
+  assert.match(system.content, /Never offer to draft, file or raise an issue/);
+  assert.doesNotMatch(system.content, /end your reply with the line/);
+
+  const content = 'Total: 29 open PRs (excluding the unknown count for app-alpie). Would you like me to draft an issue with this summary?\n[offer-draft]';
+  const fetchImpl = async () => new Response(JSON.stringify({ choices: [{ message: { content } }] }));
+  const alpie = createAlpie({ apiKey: 'k', baseUrl: 'https://x', model: 'm', timeoutMs: 1000, fetchImpl });
+  const reply = await alpie.answer({ repos: ['169Pi/devrel'], canOfferDraft: false, conversation: 'What about PRs?', templates: [], issues: [] });
+  assert.deepEqual(reply, { text: 'Total: 29 open PRs (excluding the unknown count for app-alpie).', offerDraft: false });
 });

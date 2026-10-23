@@ -123,6 +123,21 @@ export function looksLikeIssue(text) {
   return PROBLEM.test(t) || (SOFT_ISSUE.test(t) && !QUESTION.test(t));
 }
 
+// Other things worth filing besides bugs: a new Alpie showcase project, or a request that needs someone to act.
+const FILEABLE =
+  /\b(showcase|(i|we) (built|made|shipped|launched)|built (a|an|with|this|something)|request(ing)?|please (add|fix|support|change|update)|(is|are) missing|we (should|need)|needs? (a|an|to be) (fix|fixed|added|updated|changed))\b/i;
+
+/**
+ * True when it can make sense to offer to file the message as an issue: a bug or problem, a new Alpie
+ * showcase project, or an open request that needs tracking. Questions about issues, PRs, counts or access never are.
+ */
+export function mayNeedIssue(text) {
+  const t = String(text ?? '').replace(GREETING, '');
+  if (WANTS_FILED.test(t) || REDRAFT.test(t)) return true;
+  if (ABOUT_ISSUES.test(t)) return false;
+  return PROBLEM.test(t) || FILEABLE.test(t);
+}
+
 /** People a question is about: Slack mentions (<@U123>), typed GitHub usernames (@octocat), and "me"/"my". */
 export function peopleAskedAbout(text) {
   const t = String(text ?? '');

@@ -134,7 +134,7 @@ export function createRepos(destinations, { token, ttlMs, logger = console, make
     describe() {
       const access = (r) =>
         (r.accessError ? ` (no access: ${r.accessError})` : r.public ? '' : ' (private)') + (r.watchOnly ? ' (questions only)' : '');
-      // GitHub shows the token's owner as every issue's author, so say who that is.
+      // GitHub shows the bot's account as the author of issues filed by people who aren't signed in, so say who that is.
       return list.map((r) => `${r.repo}${access(r)}${r.owner && !r.watchOnly ? ` as @${r.owner}` : ''}`).join(' and ');
     },
 
@@ -149,7 +149,8 @@ export function createRepos(destinations, { token, ttlMs, logger = console, make
           });
           // Watched repos have no templates and aren't filed into, so there's nothing more to check.
           if (r.watchOnly) return;
-          r.owner = await r.github.tokenOwner?.();
+          // A GitHub App's bot account is known up front; a token's owner has to be asked for.
+          r.owner ??= await r.github.tokenOwner?.();
           await r.templates.refresh().catch((err) => {
             if (r.main) throw err;
             logger.warn(`Couldn't load templates from ${r.repo} yet: ${err.message}`);
