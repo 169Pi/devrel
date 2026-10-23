@@ -422,9 +422,13 @@ Rules:
 - When asked for a list, list the matching issues below (number, title, link). If there are more than you were given, say how many in total and link the repo's issues page.
 - If you have no data for what they asked (for example a date range other than the last 7 days, or pull request titles), say so and say what you can tell them instead.
 - If you can't tell what they want, don't guess and don't draft anything. In one or two lines, say what you can do (answer questions about issues, pull requests and access, or draft an issue from a bug, idea or feedback) and ask what would help: which repo, whose issues, or what went wrong.
-- Decide whether the last message is something the person would likely want filed as an issue: a bug or problem they ran into, an idea, or a request, in their own words. Questions about existing issues, pull requests, counts, people, access or how to use you are not. Only when it is, offer in one short sentence to draft it, and end your reply with the line ${OFFER_DRAFT}, which adds a "Draft an issue" button. Otherwise never mention drafting, and never write ${OFFER_DRAFT}.
+{draftRule}
 - Answer what was asked, without notes about access, filing or buttons unless they ask. (The Slack triage buttons only work on issue cards for repos you file into: never on pull requests or questions-only repos.)
 - Reply in plain Markdown. No JSON, no headings.`;
+
+// Which messages get an offer to draft. Kept narrow: a button under every answer is noise.
+const DRAFT_RULE = `- Offer to draft an issue only when the last message is one of these, in the person's own words: a bug or problem they ran into; a new Alpie showcase project they built; or a request or open problem that still needs someone to act on it and isn't already in the open issues below. Nothing else qualifies: questions, counts, lists, summaries or the status of existing issues and pull requests, people, access, how to use you, and follow-ups to those ("what about PRs?"). Never offer to turn your own answer or a summary into an issue. When it qualifies, offer in one short sentence and end your reply with the line ${OFFER_DRAFT}, which adds a "Draft an issue" button. Otherwise never mention drafting, and never write ${OFFER_DRAFT}.`;
+const NO_DRAFT_RULE = `- This message is not one to file. Never offer to draft, file or raise an issue, and never write ${OFFER_DRAFT}.`;
 
 const repoNames = (repos) => (repos.length === 1 ? `repo ${repos[0]}` : `repos ${repos.join(' and ')}`);
 
@@ -491,7 +495,7 @@ function personLines(p) {
     .join('\n');
 }
 
-export function buildAnswerMessages({ repo, repos = [repo], model, conversation, templates = [], issues = [], pulls = [], stats = [], access = [], asker, people = [] }) {
+export function buildAnswerMessages({ repo, repos = [repo], model, canOfferDraft = true, conversation, templates = [], issues = [], pulls = [], stats = [], access = [], asker, people = [] }) {
   const several = repos.length > 1;
   const templateList =
     templates.map((t) => `- ${t.name}${several && t.repo ? ` (files to ${t.repo})` : ''}: ${t.about || 'no description'}`).join('\n') ||
@@ -510,10 +514,9 @@ export function buildAnswerMessages({ repo, repos = [repo], model, conversation,
   return [
     {
       role: 'system',
-      content: ANSWER_PROMPT.replaceAll('{repos}', repoNames(repos)).replaceAll(
-        '{model}',
-        model ? `${MODEL_NAMES[model] ?? 'Alpie'} (${model})` : 'Alpie',
-      ),
+      content: ANSWER_PROMPT.replaceAll('{repos}', repoNames(repos))
+        .replaceAll('{model}', model ? `${MODEL_NAMES[model] ?? 'Alpie'} (${model})` : 'Alpie')
+        .replace('{draftRule}', canOfferDraft ? DRAFT_RULE : NO_DRAFT_RULE),
     },
     {
       role: 'user',
@@ -571,6 +574,18 @@ export function splitDraftOffer(text) {
 // "Would you like me to draft an issue?", "If you'd like, I can draft it", "Want me to file this?"
 const DRAFT_OFFER =
   /\b(would you like|do you want|want me to|shall i|should i|if you'?d like|happy to|i'?d be glad to)\b[^.?!\n]{0,40}\b(draft|file|raise|turn)\b[^.?!\n]{0,40}\b(issue|ticket|it|this|that)\b/i;
+
+// The whole sentence an offer sits in ("Would you like me to draft an issue with this summary?").
+const DRAFT_OFFER_SENTENCE = new RegExp(`[^.?!\\n]*${DRAFT_OFFER.source}[^.?!\\n]*[.?!]*`, 'gi');
+
+/** Removes any offer to draft from an answer to a message that isn't one to file. */
+export function withoutDraftOffer(text) {
+  return splitDraftOffer(text)
+    .text.replace(DRAFT_OFFER_SENTENCE, '')
+    .replace(/[ \t]+$/gm, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
 
 /** Removes links Alpie made up: anything not in the issue list, the repo, or the conversation itself. */
 export function keepKnownLinks(text, allowed) {
@@ -762,8 +777,9 @@ export function createAlpie({ apiKey, baseUrl, model, thinking = false, timeoutM
     /**
      * Answers a question in a Slack conversation, grounded in the templates and recent issues.
      * `offerDraft` is true when Alpie thinks the message is something the person would want filed.
+     * With `canOfferDraft` false (the message is a question, not a bug or request) it never is.
      */
-    async answer({ repo, repos = [repo], conversation, templates, issues, pulls = [], stats, access, asker, people = [], onProgress }) {
+    async answer({ repo, repos = [repo], canOfferDraft = true, conversation, templates, issues, pulls = [], stats, access, asker, people = [], onProgress }) {
       const allowed = [
         ...repos.flatMap((r) => [`https://github.com/${r}`, `https://github.com/${r}/issues`, `https://github.com/${r}/pulls`]),
         ...issues.map((i) => i.url),
@@ -772,9 +788,12 @@ export function createAlpie({ apiKey, baseUrl, model, thinking = false, timeoutM
         ...(conversation.match(URL) ?? []),
       ];
       // Partial answers shown while streaming get the same link filtering as the final one.
-      const progress = onProgress && ((p) => onProgress({ ...p, output: splitDraftOffer(keepKnownLinks(p.output, allowed)).text }));
-      const reply = stripReasoning(await complete(buildAnswerMessages({ repos, model, conversation, templates, issues, pulls, stats, access, asker, people }), { onProgress: progress }));
-      const { text, offerDraft } = splitDraftOffer(reply);
+      const clean = (t) => (canOfferDraft ? splitDraftOffer(t).text : withoutDraftOffer(t));
+      const progress = onProgress && ((p) => onProgress({ ...p, output: clean(keepKnownLinks(p.output, allowed)) }));
+      const messages = buildAnswerMessages({ repos, model, canOfferDraft, conversation, templates, issues, pulls, stats, access, asker, people });
+      const reply = stripReasoning(await complete(messages, { onProgress: progress }));
+      const text = clean(reply);
+      const offerDraft = canOfferDraft && splitDraftOffer(reply).offerDraft;
       if (!text) throw new AlpieError('Alpie returned an empty answer');
       return { text: keepKnownLinks(text, allowed).slice(0, 3500), offerDraft };
     },

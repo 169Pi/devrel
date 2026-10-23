@@ -27,6 +27,7 @@ import {
   isAcknowledgement,
   latestDraft,
   looksLikeIssue,
+  mayNeedIssue,
   markdownToMrkdwn,
   mentionsSomeone,
   peopleAskedAbout,
@@ -694,6 +695,8 @@ async function handleConversation({ client, logger, event, text, isDm, followUp 
     const reply = await alpie.answer({
       repos: visible.map((r) => r.repo),
       model: config.alpie.model,
+      // Only bugs, showcase projects and open requests get an offer to draft; questions never do.
+      canOfferDraft: mayNeedIssue(text),
       conversation,
       templates: all,
       issues,
